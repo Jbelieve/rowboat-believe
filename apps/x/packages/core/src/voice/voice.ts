@@ -6,7 +6,7 @@ import { WorkDir } from '../config/config.js';
 import { API_URL } from '../config/env.js';
 
 export interface VoiceConfig {
-    deepgram: { apiKey: string } | null;
+    deepgram: { apiKey: string; language?: string } | null;
     elevenlabs: { apiKey: string; voiceId?: string } | null;
 }
 
@@ -25,7 +25,9 @@ export async function getVoiceConfig(): Promise<VoiceConfig> {
     const elConfig = await readJsonConfig('elevenlabs.json');
 
     return {
-        deepgram: dgConfig?.apiKey ? { apiKey: dgConfig.apiKey as string } : null,
+        deepgram: dgConfig?.apiKey
+            ? { apiKey: dgConfig.apiKey as string, language: dgConfig.language as string | undefined }
+            : null,
         elevenlabs: elConfig?.apiKey
             ? { apiKey: elConfig.apiKey as string, voiceId: elConfig.voiceId as string | undefined }
             : null,

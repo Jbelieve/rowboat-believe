@@ -6,19 +6,30 @@ import { useRowboatAccount } from '@/hooks/useRowboatAccount';
 
 export type MeetingTranscriptionState = 'idle' | 'connecting' | 'recording' | 'stopping';
 
-const DEEPGRAM_PARAMS = new URLSearchParams({
-    model: 'nova-3',
-    encoding: 'linear16',
-    sample_rate: '16000',
-    channels: '2',
-    multichannel: 'true',
-    diarize: 'true',
-    interim_results: 'true',
-    smart_format: 'true',
-    punctuate: 'true',
-    language: 'en',
-});
-const DEEPGRAM_LISTEN_URL = `wss://api.deepgram.com/v1/listen?${DEEPGRAM_PARAMS.toString()}`;
+// Default transcription language. 'multi' = Deepgram's real-time multilingual
+// model (nova-3), which detects and transcribes Spanish/English (including
+// code-switching mid-sentence) instead of forcing everything through en-US.
+// With language='en' a Spanish meeting was transcribed as garbage English
+// ("What are you," for 3 minutes of Spanish). Override per-install via
+// config/deepgram.json { "apiKey": "...", "language": "es" | "multi" | "en" }.
+const DEFAULT_DEEPGRAM_LANGUAGE = 'multi';
+
+// nova-3 is the only Deepgram model that supports language='multi' in
+// streaming. For a fixed single language (e.g. 'es') nova-3 also works.
+function buildDeepgramParams(language: string): URLSearchParams {
+    return new URLSearchParams({
+        model: 'nova-3',
+        encoding: 'linear16',
+        sample_rate: '16000',
+        channels: '2',
+        multichannel: 'true',
+        diarize: 'true',
+        interim_results: 'true',
+        smart_format: 'true',
+        punctuate: 'true',
+        language,
+    });
+}
 
 // RMS threshold: system audio above this = "active" (speakers playing)
 const SYSTEM_AUDIO_GATE_THRESHOLD = 0.005;
@@ -271,22 +282,28 @@ export function useMeetingTranscription(onAutoStop?: () => void) {
             // 2. Set up Deepgram WebSocket (account refresh + connect + wait for open)
             (async () => {
                 const account = await refreshRowboatAccount();
+                // Read the configured meeting language (defaults to multilingual)
+                // up front so both the Rowboat-proxied and direct-key paths use it.
+                const voiceConfig = await window.ipc.invoke('voice:getConfig', null);
+                const language = voiceConfig?.deepgram?.language || DEFAULT_DEEPGRAM_LANGUAGE;
+                const params = buildDeepgramParams(language);
+                console.log(`[meeting] Deepgram language: ${language}`);
                 let ws: WebSocket;
                 if (
                     account?.signedIn &&
                     account.accessToken &&
                     account.config?.websocketApiUrl
                 ) {
-                    const listenUrl = buildDeepgramListenUrl(account.config.websocketApiUrl, DEEPGRAM_PARAMS);
+                    const listenUrl = buildDeepgramListenUrl(account.config.websocketApiUrl, params);
                     console.log('[meeting] Using Rowboat WebSocket');
                     ws = new WebSocket(listenUrl, ['bearer', account.accessToken]);
                 } else {
-                    const config = await window.ipc.invoke('voice:getConfig', null);
-                    if (!config?.deepgram) {
+                    if (!voiceConfig?.deepgram) {
                         throw new Error('No Deepgram config available');
                     }
                     console.log('[meeting] Using Deepgram API key');
-                    ws = new WebSocket(DEEPGRAM_LISTEN_URL, ['token', config.deepgram.apiKey]);
+                    const listenUrl = `wss://api.deepgram.com/v1/listen?${params.toString()}`;
+                    ws = new WebSocket(listenUrl, ['token', voiceConfig.deepgram.apiKey]);
                 }
                 const ok = await new Promise<boolean>((resolve) => {
                     ws.onopen = () => resolve(true);

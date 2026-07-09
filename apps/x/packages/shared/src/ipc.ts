@@ -1620,7 +1620,7 @@ const ipcSchemas = {
   'voice:getConfig': {
     req: z.null(),
     res: z.object({
-      deepgram: z.object({ apiKey: z.string() }).nullable(),
+      deepgram: z.object({ apiKey: z.string(), language: z.string().optional() }).nullable(),
       elevenlabs: z.object({ apiKey: z.string(), voiceId: z.string().optional() }).nullable(),
     }),
   },
