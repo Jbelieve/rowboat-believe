@@ -136,6 +136,23 @@ const __dirname = dirname(__filename);
       const o = (Array.isArray(args) ? opts : args) || {};
       const stdio = o && typeof o === "object" ? JSON.stringify(o.stdio) : "?";
       w(`[${new Date().toISOString()}] SPAWN cmd=${String(cmd)} args=${JSON.stringify(a).slice(0, 200)} stdio=${stdio}`);
+      // believe: DIAGNÓSTICO — aislar qué opción del spawn de claude dispara EBADF.
+      if (String(cmd).includes("claude") && o && typeof o === "object") {
+        const optKeys = Object.keys(o);
+        w(`  OPTS keys=${JSON.stringify(optKeys)} cwd=${String(o.cwd)} hasSignal=${!!o.signal} windowsHide=${!!o.windowsHide} envCount=${o.env ? Object.keys(o.env).length : "none"}`);
+        const control = (name: string, copts: any) => {
+          try {
+            const c = origSpawn(cmd, ["--version"], copts);
+            c.on("error", (e: any) => w(`  CTRL[${name}] err ${e.code}`));
+            c.on("spawn", () => { w(`  CTRL[${name}] OK`); try { c.kill(); } catch { /*noop*/ } });
+          } catch (e: any) { w(`  CTRL[${name}] throw ${e.code}`); }
+        };
+        control("minimal", { stdio: ["pipe", "pipe", "pipe"] });
+        control("with-env", { stdio: ["pipe", "pipe", "pipe"], env: o.env });
+        control("with-cwd", { stdio: ["pipe", "pipe", "pipe"], cwd: o.cwd });
+        control("with-signal", { stdio: ["pipe", "pipe", "pipe"], signal: o.signal });
+        control("execPath-node", { stdio: ["pipe", "pipe", "pipe"], env: { ...o.env, ELECTRON_RUN_AS_NODE: "1" } });
+      }
       try {
         const child = origSpawn(cmd, args, opts);
         if (child && typeof child.on === "function") {
