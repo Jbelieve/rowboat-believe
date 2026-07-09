@@ -202,16 +202,24 @@ module.exports = {
             NSCameraUsageDescription: 'Rowboat uses your camera in video chat mode so the assistant can see you and give feedback (e.g. pitch practice).',
         },
         // believe: firmar/notarizar solo si hay credenciales Apple en el entorno
-        // (sin esto, un make local sin certs muere en el check de notarización)
-        ...(process.env.APPLE_ID ? {
+        // (sin esto, un make local sin certs muere en el check de notarización).
+        // Soporta perfil de llavero (APPLE_KEYCHAIN_PROFILE) o appleId/password.
+        ...((process.env.APPLE_ID || process.env.APPLE_KEYCHAIN_PROFILE) ? {
             osxSign: {
                 batchCodesignCalls: true,
+                // believe: identidad por hash si APPLE_SIGN_IDENTITY está seteado
+                // (hay 2 certs Developer ID homónimos en llaveros distintos → "ambiguous")
+                ...(process.env.APPLE_SIGN_IDENTITY ? { identity: process.env.APPLE_SIGN_IDENTITY } : {}),
+                // believe: no firmar binarios Windows empaquetados (node-pty prebuilds) — codesign truena con PE
+                ignore: (filePath) => /win32-|\.exe$|\.dll$/i.test(filePath),
                 optionsForFile: () => ({
                     entitlements: path.join(__dirname, 'entitlements.plist'),
                     'entitlements-inherit': path.join(__dirname, 'entitlements.plist'),
                 }),
             },
-            osxNotarize: {
+            osxNotarize: process.env.APPLE_KEYCHAIN_PROFILE ? {
+                keychainProfile: process.env.APPLE_KEYCHAIN_PROFILE,
+            } : {
                 appleId: process.env.APPLE_ID,
                 appleIdPassword: process.env.APPLE_PASSWORD,
                 teamId: process.env.APPLE_TEAM_ID
