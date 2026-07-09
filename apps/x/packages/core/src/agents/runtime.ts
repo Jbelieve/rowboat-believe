@@ -1370,7 +1370,18 @@ export async function* streamAgent({
     }
     const modelId = state.runModel;
     const providerConfig = await resolveProviderConfig(state.runProvider);
-    const model = createLanguageModel(providerConfig, modelId);
+    // believe: the claude-code flavor (Claude subscription via the CLI) ignores
+    // the AI SDK `tools` option and only invokes tools exposed through its own
+    // in-process MCP server. Pass this agent's builtin tool names so the bridge
+    // (claude-code-mcp-bridge.ts) exposes them — cowork/copilot agents run on the
+    // subscription with Rowboat's full tool catalog. Only builtin tools bridge;
+    // MCP-typed and agent-typed tools already route through their own channels.
+    const claudeCodeBuiltinTools = providerConfig.flavor === 'claude-code'
+        ? Object.values(agent.tools ?? {})
+            .filter((t): t is z.infer<typeof ToolAttachment> & { type: 'builtin' } => t.type === 'builtin')
+            .map((t) => t.name)
+        : undefined;
+    const model = createLanguageModel(providerConfig, modelId, claudeCodeBuiltinTools);
     logger.log(`using model: ${modelId} (provider: ${state.runProvider})`);
 
     // Install use-case context for tool-internal LLM calls (e.g. parseFile)

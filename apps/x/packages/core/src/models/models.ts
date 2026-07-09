@@ -7,6 +7,7 @@ import { createOllama } from "ollama-ai-provider-v2";
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createClaudeCode } from 'ai-sdk-provider-claude-code'; // believe:
+import { buildRowboatMcpBridge, ROWBOAT_MCP_SERVER_NAME } from './claude-code-mcp-bridge.js'; // believe:
 import { LlmModelConfig, LlmProvider } from "@x/shared/dist/models.js";
 import z from "zod";
 import { getGatewayProvider } from "./gateway.js";
@@ -23,7 +24,17 @@ import {
 export const Provider = LlmProvider;
 export const ModelConfig = LlmModelConfig;
 
-export function createProvider(config: z.infer<typeof Provider>): ProviderV2 {
+// believe: When the flavor is "claude-code", the model runs on the user's
+// Claude subscription via the `claude` CLI, which ignores the AI SDK `tools`
+// option and only invokes tools exposed through its own `mcpServers`. Callers
+// that want the cowork/copilot tools available to the subscription model pass
+// the agent's builtin tool names here; we bridge them into an in-process MCP
+// server (see claude-code-mcp-bridge.ts) and allowlist them. Ignored by every
+// other flavor.
+export function createProvider(
+    config: z.infer<typeof Provider>,
+    claudeCodeBuiltinTools?: string[],
+): ProviderV2 {
     const { apiKey, baseURL, headers } = config;
     switch (config.flavor) {
         case "openai":
@@ -83,9 +94,22 @@ export function createProvider(config: z.infer<typeof Provider>): ProviderV2 {
         case "rowboat":
             return getGatewayProvider();
         // believe: Claude subscription via Claude Code CLI / Agent SDK. No apiKey —
-        // auth comes from the user's `claude` login on this machine.
-        case "claude-code":
+        // auth comes from the user's `claude` login on this machine. When builtin
+        // tool names are provided, bridge them into an in-process MCP server so the
+        // subscription model can invoke Rowboat's tools (cowork agents at 100%).
+        case "claude-code": {
+            if (claudeCodeBuiltinTools && claudeCodeBuiltinTools.length > 0) {
+                const bridge = buildRowboatMcpBridge(claudeCodeBuiltinTools);
+                return createClaudeCode({
+                    defaultSettings: {
+                        mcpServers: { [ROWBOAT_MCP_SERVER_NAME]: bridge.server },
+                        allowedTools: bridge.allowedTools,
+                        permissionMode: 'bypassPermissions',
+                    },
+                }) as unknown as ProviderV2;
+            }
             return createClaudeCode() as unknown as ProviderV2;
+        }
         default:
             throw new Error(`Unsupported provider flavor: ${config.flavor}`);
     }
@@ -98,8 +122,11 @@ export function createProvider(config: z.infer<typeof Provider>): ProviderV2 {
 export function createLanguageModel(
     providerConfig: z.infer<typeof Provider>,
     modelId: string,
+    // believe: builtin tool names to bridge over MCP for the claude-code flavor.
+    // Ignored by all other flavors.
+    claudeCodeBuiltinTools?: string[],
 ): LanguageModel {
-    const model = createProvider(providerConfig).languageModel(modelId);
+    const model = createProvider(providerConfig, claudeCodeBuiltinTools).languageModel(modelId);
     return applyLocalModelSettings(model, providerConfig);
 }
 
