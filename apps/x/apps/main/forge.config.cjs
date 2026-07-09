@@ -201,18 +201,22 @@ module.exports = {
             NSAudioCaptureUsageDescription: 'Rowboat needs access to system audio to transcribe meetings from other apps (Zoom, Meet, etc.)',
             NSCameraUsageDescription: 'Rowboat uses your camera in video chat mode so the assistant can see you and give feedback (e.g. pitch practice).',
         },
-        osxSign: {
-            batchCodesignCalls: true,
-            optionsForFile: () => ({
-                entitlements: path.join(__dirname, 'entitlements.plist'),
-                'entitlements-inherit': path.join(__dirname, 'entitlements.plist'),
-            }),
-        },
-        osxNotarize: {
-            appleId: process.env.APPLE_ID,
-            appleIdPassword: process.env.APPLE_PASSWORD,
-            teamId: process.env.APPLE_TEAM_ID
-        },
+        // believe: firmar/notarizar solo si hay credenciales Apple en el entorno
+        // (sin esto, un make local sin certs muere en el check de notarización)
+        ...(process.env.APPLE_ID ? {
+            osxSign: {
+                batchCodesignCalls: true,
+                optionsForFile: () => ({
+                    entitlements: path.join(__dirname, 'entitlements.plist'),
+                    'entitlements-inherit': path.join(__dirname, 'entitlements.plist'),
+                }),
+            },
+            osxNotarize: {
+                appleId: process.env.APPLE_ID,
+                appleIdPassword: process.env.APPLE_PASSWORD,
+                teamId: process.env.APPLE_TEAM_ID
+            },
+        } : {}),
         // Since we bundle the main process with esbuild, we don't need the workspace
         // node_modules. These settings prevent Forge's dependency walker (flora-colossus)
         // from trying to analyze/copy node_modules, which fails with pnpm's symlinked
