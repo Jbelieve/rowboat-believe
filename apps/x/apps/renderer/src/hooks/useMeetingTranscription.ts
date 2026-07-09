@@ -50,6 +50,14 @@ const SILENCE_CHECK_INTERVAL_MS = 5 * 1000;
 const TRACK_POLL_INTERVAL_MS = 3 * 1000;
 const MUTE_POLLS_TO_STOP = 3;
 
+// Startup grace window. On macOS, getDisplayMedia({audio,video}) returns a
+// single ScreenCaptureKit capture; stopping its video track (we only want the
+// loopback audio) tears the audio track down too, firing a spurious "ended"
+// right after recording begins. That instantly auto-stopped the session before
+// any transcription could start. Ignore every auto-stop signal for a short
+// window after start — a real meeting-close never happens in the first seconds.
+const AUTOSTOP_GRACE_MS = 4 * 1000;
+
 // The ScreenCaptureKit quirk above is macOS-only; on Windows the track's "ended"
 // event fires normally (handled by the listener in start()), so the poll below is
 // gated to macOS.
@@ -163,6 +171,17 @@ export function useMeetingTranscription(onAutoStop?: () => void) {
     const trackPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const onAutoStopRef = useRef(onAutoStop);
     onAutoStopRef.current = onAutoStop;
+    // Timestamp (ms) when the current recording started. Auto-stop signals that
+    // fire within AUTOSTOP_GRACE_MS of this are ignored (see AUTOSTOP_GRACE_MS).
+    const recordingStartedAtRef = useRef<number>(0);
+    const requestAutoStop = useCallback((reason: string) => {
+        const elapsed = Date.now() - recordingStartedAtRef.current;
+        if (elapsed < AUTOSTOP_GRACE_MS) {
+            console.log(`[meeting] ignoring auto-stop (${reason}) — fired ${elapsed}ms into startup grace`);
+            return;
+        }
+        onAutoStopRef.current?.();
+    }, []);
     const dateRef = useRef<string>('');
     const calendarEventRef = useRef<CalendarEventMeta | undefined>(undefined);
 
@@ -317,6 +336,11 @@ export function useMeetingTranscription(onAutoStop?: () => void) {
             return null;
         }
 
+        // Arm the startup grace window before wiring up any auto-stop listeners
+        // (the "ended" listener and macOS poll below), so a spurious "ended"
+        // fired during setup is correctly recognised as within-grace.
+        recordingStartedAtRef.current = Date.now();
+
         const usingHeadphones = headphoneResult.status === 'fulfilled' ? headphoneResult.value : false;
         console.log(`[meeting] Audio output mode: ${usingHeadphones ? 'headphones' : 'speakers'}`);
 
@@ -378,7 +402,7 @@ export function useMeetingTranscription(onAutoStop?: () => void) {
         systemStream.getAudioTracks().forEach(track => {
             track.addEventListener('ended', () => {
                 console.log('[meeting] system-audio track ended (shared source closed) — auto-stopping');
-                onAutoStopRef.current?.();
+                requestAutoStop('track ended');
             });
         });
 
@@ -404,7 +428,7 @@ export function useMeetingTranscription(onAutoStop?: () => void) {
             trackPollingRef.current = setInterval(() => {
                 if (pollTrack.readyState === 'ended') {
                     console.log('[meeting] system-audio track ended (poll) — auto-stopping');
-                    onAutoStopRef.current?.();
+                    requestAutoStop('track ended (poll)');
                     return;
                 }
                 if (pollTrack.muted) {
@@ -413,7 +437,7 @@ export function useMeetingTranscription(onAutoStop?: () => void) {
                     const pastCalendarEnd = endMs != null && Date.now() > endMs;
                     if (pastCalendarEnd && mutedPolls >= MUTE_POLLS_TO_STOP) {
                         console.log('[meeting] system-audio track muted past scheduled end (poll) — auto-stopping');
-                        onAutoStopRef.current?.();
+                        requestAutoStop('muted past scheduled end');
                     }
                 } else {
                     mutedPolls = 0;
@@ -523,7 +547,7 @@ export function useMeetingTranscription(onAutoStop?: () => void) {
 
             if (silentMs >= hardStopMs) {
                 console.log(`[meeting] ${Math.round(silentMs / 1000)}s of silence${pastCalendarEnd ? ' (past scheduled end)' : ''} — auto-stopping`);
-                onAutoStopRef.current?.();
+                requestAutoStop('silence backstop');
                 return;
             }
 
@@ -550,7 +574,7 @@ export function useMeetingTranscription(onAutoStop?: () => void) {
 
         setState('recording');
         return notePath;
-    }, [state, cleanup, scheduleDebouncedWrite, refreshRowboatAccount]);
+    }, [state, cleanup, scheduleDebouncedWrite, refreshRowboatAccount, requestAutoStop]);
 
     const stop = useCallback(async () => {
         if (state !== 'recording') return;
