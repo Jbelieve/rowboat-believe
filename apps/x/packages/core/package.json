@@ -29,6 +29,7 @@
     "@types/react": "^19.2.7",
     "@x/shared": "workspace:*",
     "ai": "^5.0.133",
+    "ai-sdk-provider-claude-code": "2.3.0",
     "awilix": "^12.0.5",
     "baileys": "7.0.0-rc13",
     "chokidar": "^4.0.3",

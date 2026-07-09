@@ -6,6 +6,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOllama } from "ollama-ai-provider-v2";
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { createClaudeCode } from 'ai-sdk-provider-claude-code'; // believe:
 import { LlmModelConfig, LlmProvider } from "@x/shared/dist/models.js";
 import z from "zod";
 import { getGatewayProvider } from "./gateway.js";
@@ -81,6 +82,10 @@ export function createProvider(config: z.infer<typeof Provider>): ProviderV2 {
             }) as unknown as ProviderV2;
         case "rowboat":
             return getGatewayProvider();
+        // believe: Claude subscription via Claude Code CLI / Agent SDK. No apiKey —
+        // auth comes from the user's `claude` login on this machine.
+        case "claude-code":
+            return createClaudeCode() as unknown as ProviderV2;
         default:
             throw new Error(`Unsupported provider flavor: ${config.flavor}`);
     }
@@ -208,7 +213,8 @@ export async function testModelConnection(
     model: string,
     timeoutMs?: number,
 ): Promise<{ success: boolean; error?: string; warnings?: string[]; capabilities?: ModelCapabilities }> {
-    const isLocal = providerConfig.flavor === "ollama" || providerConfig.flavor === "openai-compatible";
+    const isLocal = providerConfig.flavor === "ollama" || providerConfig.flavor === "openai-compatible"
+        || providerConfig.flavor === "claude-code"; // believe: CLI spawn is slower than an HTTP ping
     const effectiveTimeout = timeoutMs ?? (isLocal ? 60000 : 8000);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), effectiveTimeout);
@@ -244,6 +250,12 @@ export async function listModelsForProvider(
     try {
         let url = "";
         const headers: Record<string, string> = {};
+
+        // believe: claude-code has no HTTP listing endpoint; the CLI accepts
+        // these aliases plus raw model ids. Keep the list static.
+        if (flavor === "claude-code") {
+            return ["sonnet", "opus", "haiku"];
+        }
 
         switch (flavor) {
             case "openai":

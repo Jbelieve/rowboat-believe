@@ -78,6 +78,11 @@ export async function resolveProviderConfig(name: string): Promise<z.infer<typeo
     if (name === "rowboat") {
         return { flavor: "rowboat" };
     }
+    // believe: claude-code needs no credentials — auth lives in the user's
+    // Claude Code CLI login, so it resolves even without a providers entry.
+    if (name === "claude-code") {
+        return { flavor: "claude-code" };
+    }
     const repo = container.resolve<IModelConfigRepo>("modelConfigRepo");
     const cfg = await repo.getConfig();
     const entry = cfg.providers?.[name];
