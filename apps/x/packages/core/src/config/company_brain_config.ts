@@ -2,6 +2,7 @@
 // Pattern: gmail_sync_config.ts — WorkDir/config/company_brain.json.
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { z } from 'zod';
 import { WorkDir } from './config.js';
 
@@ -17,6 +18,8 @@ export const CompanyBrainConfig = z.object({
     enabled: z.boolean().default(false),
     pullIntervalMs: z.number().int().positive().default(DEFAULT_PULL_INTERVAL_MS),
     pushIntervalMs: z.number().int().positive().default(DEFAULT_PUSH_INTERVAL_MS),
+    /** Short per-device id (8 hex) namespacing this device's fanout external_ids. */
+    deviceId: z.string().optional(),
 });
 export type CompanyBrainConfig = z.infer<typeof CompanyBrainConfig>;
 
@@ -28,6 +31,8 @@ export type CompanyBrainConfig = z.infer<typeof CompanyBrainConfig>;
 export function getCompanyBrainConfig(): CompanyBrainConfig {
     try {
         if (fs.existsSync(CONFIG_FILE)) {
+            // Holds the apiKey: tighten permissions even on pre-existing files.
+            try { fs.chmodSync(CONFIG_FILE, 0o600); } catch { /* best effort */ }
             const raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
             const parsed = CompanyBrainConfig.safeParse(raw);
             if (parsed.success) return parsed.data;
@@ -47,4 +52,20 @@ export function setCompanyBrainConfig(config: Partial<CompanyBrainConfig>): void
         fs.mkdirSync(configDir, { recursive: true });
     }
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    // writeFileSync's mode only applies on creation; enforce it on rewrites too.
+    try { fs.chmodSync(CONFIG_FILE, 0o600); } catch { /* best effort */ }
+}
+
+/**
+ * Stable per-device id (8 random hex chars), generated once and persisted in
+ * company_brain.json. Namespaces this device's fanout external_ids
+ * (`desktop:<deviceId>:<relpath>`) so the pull echo filter only discards this
+ * device's own pushes — desktop notes from OTHER devices do materialize.
+ */
+export function getDeviceId(): string {
+    const config = getCompanyBrainConfig();
+    if (config.deviceId) return config.deviceId;
+    const deviceId = crypto.randomBytes(4).toString('hex');
+    setCompanyBrainConfig({ deviceId });
+    return deviceId;
 }

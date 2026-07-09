@@ -26,6 +26,8 @@ export type MattermostConfig = z.infer<typeof MattermostConfig>;
 export function getMattermostConfig(): MattermostConfig | null {
     try {
         if (fs.existsSync(CONFIG_FILE)) {
+            // Holds the token: tighten permissions even on pre-existing files.
+            try { fs.chmodSync(CONFIG_FILE, 0o600); } catch { /* best effort */ }
             const raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
             const parsed = MattermostConfig.safeParse(raw);
             if (parsed.success) return parsed.data;
@@ -45,4 +47,6 @@ export function setMattermostConfig(config: MattermostConfig): void {
         fs.mkdirSync(configDir, { recursive: true });
     }
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    // writeFileSync's mode only applies on creation; enforce it on rewrites too.
+    try { fs.chmodSync(CONFIG_FILE, 0o600); } catch { /* best effort */ }
 }

@@ -1,25 +1,36 @@
 // believe: episode fanout producer (module 3 of BELIEVE-FORK.md).
 // Scans WorkDir/knowledge/**/*.md for new/changed notes (mtime+hash state in
 // brain_fanout_state.json, pattern: knowledge/graph_state.ts) and pushes them
-// to the Company Brain as `manual` episodes via the injected transport.
-// Fail-soft: if the ingest call fails, NO note is marked processed — they all
-// retry on the next tick. Notes whose frontmatter carries
-// `brain_origin: central` are never pushed (echo guard for pulled artifacts).
+// to the Company Brain as `manual` episodes via the injected transport, in
+// chunks of FANOUT_CHUNK_SIZE with state persisted after each successful
+// chunk. Fail-soft: transient failures leave unpushed notes unmarked (they
+// retry next tick); deterministic 4xx rejections are bisected to the poison
+// note, which is skipped after MAX_NOTE_FAILURES. Notes whose frontmatter
+// carries `brain_origin: central` are never pushed (echo guard for pulled
+// artifacts).
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { WorkDir } from '../config/config.js';
+import { getDeviceId } from '../config/company_brain_config.js';
+import { BrainTransportError } from './transport.js';
 import type { BrainTransport, EpisodeInput } from './transport.js';
 
 const STATE_FILE = path.join(WorkDir, 'brain_fanout_state.json');
 const KNOWLEDGE_DIR = path.join(WorkDir, 'knowledge');
 /** transcript_ref hard cap from the ingest contract. */
 const MAX_TRANSCRIPT_CHARS = 8000;
+/** Episodes per ingest call; state is persisted after EACH successful chunk. */
+export const FANOUT_CHUNK_SIZE = 25;
+/** Deterministic-4xx failures before a poison note is skipped for good. */
+export const MAX_NOTE_FAILURES = 3;
 
 type FanoutFileState = {
     mtime: string;
     hash: string;
-    lastPushedAt: string;
+    lastPushedAt?: string;
+    /** Consecutive deterministic-4xx failures for this exact content hash. */
+    failCount?: number;
 };
 
 type FanoutState = {
@@ -133,11 +144,15 @@ export class EpisodeFanoutProducer {
                 const relPath = path.relative(this.knowledgeDir, fullPath);
                 const previous = state.files[relPath];
                 const mtime = stat.mtime.toISOString();
-                if (previous && previous.mtime === mtime) continue;
+                // A note mid-retry (0 < failCount < max) must be rescanned even
+                // though its mtime/hash are recorded; at max failures it is
+                // poisoned and skipped until its content changes.
+                const retrying = previous?.failCount !== undefined && previous.failCount < MAX_NOTE_FAILURES;
+                if (previous && previous.mtime === mtime && !retrying) continue;
 
                 const body = fs.readFileSync(fullPath, 'utf-8');
                 const hash = hashContent(body);
-                if (previous && previous.hash === hash) continue;
+                if (previous && previous.hash === hash && !retrying) continue;
 
                 notes.push({
                     relPath,
@@ -154,12 +169,22 @@ export class EpisodeFanoutProducer {
         return notes;
     }
 
+    private deviceId?: string;
+
+    /** Per-device namespace for external_ids, lazy-loaded from the config. */
+    private ownDeviceId(): string {
+        this.deviceId ??= getDeviceId();
+        return this.deviceId;
+    }
+
     /** Normalize one note into the ingest contract's episode shape. */
     buildEpisode(note: FanoutNote): EpisodeInput {
         const content = stripFrontmatter(note.body).trim();
         return {
             source: 'manual',
-            external_id: `desktop:${note.relPath.split(path.sep).join('/')}`,
+            // deviceId namespace: the pull echo filter only discards THIS
+            // device's ids, so other desktops' notes still materialize.
+            external_id: `desktop:${this.ownDeviceId()}:${note.relPath.split(path.sep).join('/')}`,
             actors: [],
             summary: extractSummary(content, note.relPath),
             transcript_ref: content.slice(0, MAX_TRANSCRIPT_CHARS),
@@ -171,30 +196,74 @@ export class EpisodeFanoutProducer {
         };
     }
 
-    /**
-     * Push all new/changed notes as one ingest batch. Fail-soft: a transport
-     * failure marks NOTHING as processed (everything retries next tick) and
-     * rethrows so the caller can record the error. On success every scanned
-     * note is marked — including excluded ones and server-side `skipped` rows
-     * (idempotent upsert already has them).
-     */
-    async emit(transport: BrainTransport): Promise<FanoutEmitResult> {
-        const notes = this.scanKnowledgeNotes();
-        if (notes.length === 0) return { pushed: 0, scanned: 0 };
-
-        const toPush = notes.filter(note => !note.excluded);
-        if (toPush.length > 0) {
-            await transport.ingestEpisodes(toPush.map(note => this.buildEpisode(note)));
-        }
-
-        // Only reached on success (or when everything was excluded).
+    /** Persist success state for a batch of notes (clears any failCount). */
+    private markPushed(notes: FanoutNote[]): void {
+        if (notes.length === 0) return;
         const state = loadState(this.stateFile);
         const now = new Date().toISOString();
         for (const note of notes) {
             state.files[note.relPath] = { mtime: note.mtime, hash: note.hash, lastPushedAt: now };
         }
         saveState(this.stateFile, state);
+    }
 
-        return { pushed: toPush.length, scanned: notes.length };
+    /** Record a deterministic-4xx failure for an isolated poison note. */
+    private recordFailure(note: FanoutNote): void {
+        const state = loadState(this.stateFile);
+        const previous = state.files[note.relPath];
+        // Counting restarts when the content changed since the last failure.
+        const failCount = (previous?.hash === note.hash ? previous.failCount ?? 0 : 0) + 1;
+        state.files[note.relPath] = { mtime: note.mtime, hash: note.hash, failCount };
+        saveState(this.stateFile, state);
+        console.error(`[BrainFanout] Note ${note.relPath} rejected by the brain (failure ${failCount}/${MAX_NOTE_FAILURES})`);
+    }
+
+    /**
+     * Push one chunk. On a deterministic 4xx (bad_request) bisect until the
+     * poison note is isolated, record its failCount and keep going with the
+     * rest. Transient errors (network/5xx/429/auth) rethrow so the run stops
+     * and retries next tick from the last persisted chunk.
+     */
+    private async pushChunk(transport: BrainTransport, chunk: FanoutNote[]): Promise<number> {
+        try {
+            await transport.ingestEpisodes(chunk.map(note => this.buildEpisode(note)));
+            this.markPushed(chunk);
+            return chunk.length;
+        } catch (error) {
+            const deterministic = error instanceof BrainTransportError && error.kind === 'bad_request';
+            if (!deterministic) throw error;
+            if (chunk.length === 1) {
+                this.recordFailure(chunk[0]);
+                return 0;
+            }
+            const mid = Math.ceil(chunk.length / 2);
+            const left = await this.pushChunk(transport, chunk.slice(0, mid));
+            const right = await this.pushChunk(transport, chunk.slice(mid));
+            return left + right;
+        }
+    }
+
+    /**
+     * Push all new/changed notes in chunks of FANOUT_CHUNK_SIZE, persisting
+     * state after EACH successful chunk. Fail-soft: a transient transport
+     * failure leaves the remaining notes unmarked (they retry next tick) and
+     * rethrows so the caller can record the error; a deterministic 4xx is
+     * bisected to the poison note, which accrues failCount and is skipped for
+     * good after MAX_NOTE_FAILURES without blocking the rest.
+     */
+    async emit(transport: BrainTransport): Promise<FanoutEmitResult> {
+        const notes = this.scanKnowledgeNotes();
+        if (notes.length === 0) return { pushed: 0, scanned: 0 };
+
+        // Excluded (centrally-owned) notes are never sent — mark them up front.
+        this.markPushed(notes.filter(note => note.excluded));
+
+        const toPush = notes.filter(note => !note.excluded);
+        let pushed = 0;
+        for (let i = 0; i < toPush.length; i += FANOUT_CHUNK_SIZE) {
+            pushed += await this.pushChunk(transport, toPush.slice(i, i + FANOUT_CHUNK_SIZE));
+        }
+
+        return { pushed, scanned: notes.length };
     }
 }

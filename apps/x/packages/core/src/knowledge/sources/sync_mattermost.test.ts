@@ -212,23 +212,66 @@ describe('syncMattermostKnowledgeSources artifacts', () => {
     });
 });
 
-describe('since watermark', () => {
-    it('first run queries without since, then advances lastPostAt and passes it as since', async () => {
+describe('watermark and pagination', () => {
+    it('pages with page+per_page (not ?since=), advances lastPostAt and skips already-seen posts', async () => {
         const p1 = post({ id: 'post-10', create_at: 1751900000000 });
         const run1 = fakeFetch(defaultRoutes([p1]));
         await sync.syncMattermostKnowledgeSources(run1.impl);
         const firstPostsCall = run1.calls.find(c => c.url.includes('/posts'));
+        // Pagination loop, never the capped ?since= query.
+        expect(firstPostsCall!.url).toContain('page=0&per_page=200');
         expect(firstPostsCall!.url).not.toContain('since=');
         expect(readState().channels[`be-chat:${CHANNEL_ID}`].lastPostAt).toBe(1751900000000);
 
         rewindSource('be-chat', 60 * 60 * 1000);
         const p2 = post({ id: 'post-11', create_at: 1751901000000, message: 'nuevo' });
-        const run2 = fakeFetch(defaultRoutes([p2]));
+        const run2 = fakeFetch(defaultRoutes([p1, p2]));
         const files = await sync.syncMattermostKnowledgeSources(run2.impl);
-        const secondPostsCall = run2.calls.find(c => c.url.includes('/posts'));
-        expect(secondPostsCall!.url).toContain('since=1751900000000');
+        // post-10 is at/below the watermark: only the new post materializes.
         expect(files).toHaveLength(1);
+        expect(files[0]).toContain('post-11');
         expect(readState().channels[`be-chat:${CHANNEL_ID}`].lastPostAt).toBe(1751901000000);
+    });
+
+    it('drains multiple pages on a first sync until a short page ends the stream', async () => {
+        // 200 posts on page 0 (newest), 5 on page 1 (older) — a single
+        // ?since= call would have capped this backlog.
+        const page0 = Array.from({ length: 200 }, (_, i) =>
+            post({ id: `post-p0-${i}`, create_at: 1751901000000 + i, message: `msg ${i}` }));
+        const page1 = Array.from({ length: 5 }, (_, i) =>
+            post({ id: `post-p1-${i}`, create_at: 1751900000000 + i, message: `old ${i}` }));
+        const routes: Route[] = [
+            { pattern: /\/posts\?page=0&per_page=200$/, body: postsResponse(page0) },
+            { pattern: /\/posts\?page=1&per_page=200$/, body: postsResponse(page1) },
+            { pattern: /\/api\/v4\/users\/ids$/, body: USERS },
+        ];
+        const { impl, calls } = fakeFetch(routes);
+        const files = await sync.syncMattermostKnowledgeSources(impl);
+        expect(files).toHaveLength(205);
+        expect(calls.filter(c => c.url.includes('/posts?')).map(c => c.url)).toEqual([
+            `${MM_URL}/api/v4/channels/${CHANNEL_ID}/posts?page=0&per_page=200`,
+            `${MM_URL}/api/v4/channels/${CHANNEL_ID}/posts?page=1&per_page=200`,
+        ]);
+    });
+
+    it('stops paging once a full page crosses below the watermark', async () => {
+        // Seed a watermark newer than everything on page 0.
+        await sync.syncMattermostKnowledgeSources(
+            fakeFetch(defaultRoutes([post({ id: 'post-seed', create_at: 1751999000000 })])).impl,
+        );
+        rewindSource('be-chat', 60 * 60 * 1000);
+        // Page 0 is FULL (200 posts) but entirely at/below the watermark: the
+        // loop must stop instead of walking the whole channel history.
+        const page0 = Array.from({ length: 200 }, (_, i) =>
+            post({ id: `post-old-${i}`, create_at: 1751900000000 + i }));
+        const routes: Route[] = [
+            { pattern: /\/posts\?page=0&per_page=200$/, body: postsResponse(page0) },
+            { pattern: /\/api\/v4\/users\/ids$/, body: USERS },
+        ];
+        const { impl, calls } = fakeFetch(routes);
+        const files = await sync.syncMattermostKnowledgeSources(impl);
+        expect(files).toHaveLength(0);
+        expect(calls.filter(c => c.url.includes('/posts?'))).toHaveLength(1);
     });
 
     it('picks up an edit of an already-seen post (edit_at moves the watermark)', async () => {

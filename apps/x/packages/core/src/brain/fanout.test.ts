@@ -13,9 +13,13 @@ process.env.ROWBOAT_WORKDIR = tmpWorkDir;
 
 const knowledgeDir = path.join(tmpWorkDir, 'knowledge');
 const stateFile = path.join(tmpWorkDir, 'brain_fanout_state.json');
+const configFile = path.join(tmpWorkDir, 'config', 'company_brain.json');
+// Fixed deviceId so external_id expectations are deterministic.
+const DEVICE_ID = 'deadbeef';
 
 type FanoutModule = typeof import('./fanout.js');
 let EpisodeFanoutProducer: FanoutModule['EpisodeFanoutProducer'];
+let BrainTransportError: typeof import('./transport.js').BrainTransportError;
 
 class FakeTransport implements BrainTransport {
     batches: EpisodeInput[][] = [];
@@ -39,11 +43,14 @@ function writeNote(relPath: string, content: string): string {
 
 beforeAll(async () => {
     ({ EpisodeFanoutProducer } = await import('./fanout.js'));
+    ({ BrainTransportError } = await import('./transport.js'));
 });
 
 beforeEach(() => {
     fs.rmSync(knowledgeDir, { recursive: true, force: true });
     fs.rmSync(stateFile, { force: true });
+    fs.mkdirSync(path.dirname(configFile), { recursive: true });
+    fs.writeFileSync(configFile, JSON.stringify({ deviceId: DEVICE_ID }), 'utf-8');
 });
 
 afterAll(() => {
@@ -60,7 +67,7 @@ describe('buildEpisode', () => {
         const episode = producer.buildEpisode(notes[0]);
         expect(episode).toMatchObject({
             source: 'manual',
-            external_id: 'desktop:Ideas/launch.md',
+            external_id: `desktop:${DEVICE_ID}:Ideas/launch.md`,
             actors: [],
             summary: 'Plan de lanzamiento',
             channel: 'desktop',
@@ -95,7 +102,7 @@ describe('scan + exclusion', () => {
         const result = await producer.emit(transport);
         expect(result).toEqual({ pushed: 1, scanned: 2 });
         expect(transport.batches).toHaveLength(1);
-        expect(transport.batches[0].map(e => e.external_id)).toEqual(['desktop:mine.md']);
+        expect(transport.batches[0].map(e => e.external_id)).toEqual([`desktop:${DEVICE_ID}:mine.md`]);
     });
 
     it('scans nothing when the knowledge dir does not exist', () => {
@@ -129,7 +136,7 @@ describe('emit state advancement', () => {
         const retry = new FakeTransport();
         const result = await producer.emit(retry);
         expect(result.pushed).toBe(1);
-        expect(retry.batches[0][0].external_id).toBe('desktop:a.md');
+        expect(retry.batches[0][0].external_id).toBe(`desktop:${DEVICE_ID}:a.md`);
     });
 
     it('re-pushes a note when its content changes', async () => {
@@ -146,6 +153,92 @@ describe('emit state advancement', () => {
         const result = await producer.emit(transport);
         expect(result.pushed).toBe(1);
         expect(transport.batches[0][0].transcript_ref).toContain('v2');
+    });
+
+    it('emits in chunks of 25 and persists state after each successful chunk', async () => {
+        for (let i = 0; i < 30; i++) {
+            writeNote(`note-${String(i).padStart(2, '0')}.md`, `# Note ${i}\n\ncuerpo ${i}\n`);
+        }
+        const transport = new FakeTransport();
+        const result = await new EpisodeFanoutProducer().emit(transport);
+        expect(result).toEqual({ pushed: 30, scanned: 30 });
+        expect(transport.batches.map(b => b.length)).toEqual([25, 5]);
+    });
+
+    it('keeps the state of already-pushed chunks when a later chunk fails transiently', async () => {
+        for (let i = 0; i < 30; i++) {
+            writeNote(`note-${String(i).padStart(2, '0')}.md`, `# Note ${i}\n\ncuerpo ${i}\n`);
+        }
+        // First chunk succeeds, second dies with a network error.
+        let call = 0;
+        const transport: BrainTransport = {
+            queryEpisodes: async () => { throw new Error('unused'); },
+            ingestEpisodes: async (eps: EpisodeInput[]) => {
+                call++;
+                if (call === 2) throw new BrainTransportError('network', 'connection reset');
+                return { ok: true, ingested: { episodes: eps.length }, skipped: {} };
+            },
+        };
+        await expect(new EpisodeFanoutProducer().emit(transport)).rejects.toThrow('connection reset');
+        // The 25 notes of the first chunk are marked; the remaining 5 retry.
+        const state = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+        expect(Object.keys(state.files)).toHaveLength(25);
+
+        const retry = new FakeTransport();
+        const result = await new EpisodeFanoutProducer().emit(retry);
+        expect(result.pushed).toBe(5);
+    });
+
+    it('bisects a deterministic 4xx to the poison note and skips it after 3 failures without blocking the rest', async () => {
+        writeNote('good-1.md', '# G1\n\nok\n');
+        writeNote('poison.md', '# P\n\nveneno\n');
+        writeNote('good-2.md', '# G2\n\nok\n');
+        const poisonId = `desktop:${DEVICE_ID}:poison.md`;
+        const rejectingTransport = (): BrainTransport & { accepted: string[] } => {
+            const accepted: string[] = [];
+            return {
+                accepted,
+                queryEpisodes: async () => { throw new Error('unused'); },
+                ingestEpisodes: async (eps: EpisodeInput[]) => {
+                    if (eps.some(e => e.external_id === poisonId)) {
+                        throw new BrainTransportError('bad_request', 'invalid episode', 400);
+                    }
+                    accepted.push(...eps.map(e => e.external_id));
+                    return { ok: true, ingested: { episodes: eps.length }, skipped: {} };
+                },
+            };
+        };
+
+        // Run 1: poison isolated (failCount 1), the other two notes land.
+        const t1 = rejectingTransport();
+        const r1 = await new EpisodeFanoutProducer().emit(t1);
+        expect(r1.pushed).toBe(2);
+        expect(t1.accepted.sort()).toEqual([`desktop:${DEVICE_ID}:good-1.md`, `desktop:${DEVICE_ID}:good-2.md`]);
+        let state = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+        expect(state.files['poison.md'].failCount).toBe(1);
+
+        // Runs 2 and 3: only the poison note retries, accruing failures.
+        await new EpisodeFanoutProducer().emit(rejectingTransport());
+        const r3 = await new EpisodeFanoutProducer().emit(rejectingTransport());
+        expect(r3).toEqual({ pushed: 0, scanned: 1 });
+        state = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+        expect(state.files['poison.md'].failCount).toBe(3);
+
+        // Run 4: poisoned note is skipped entirely.
+        const t4 = rejectingTransport();
+        const r4 = await new EpisodeFanoutProducer().emit(t4);
+        expect(r4).toEqual({ pushed: 0, scanned: 0 });
+
+        // Editing the note resets the count and retries it.
+        const abs = path.join(knowledgeDir, 'poison.md');
+        fs.writeFileSync(abs, '# P\n\narreglada\n', 'utf-8');
+        const bumped = new Date(Date.now() + 1000);
+        fs.utimesSync(abs, bumped, bumped);
+        const t5 = rejectingTransport();
+        const r5 = await new EpisodeFanoutProducer().emit(t5);
+        expect(r5).toEqual({ pushed: 0, scanned: 1 });
+        state = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+        expect(state.files['poison.md'].failCount).toBe(1);
     });
 
     it('does not re-push when mtime changes but content is identical', async () => {

@@ -19,8 +19,6 @@ import { commitAll } from './version_history.js';
 import { getTagDefinitions } from './tag_system.js';
 import { knowledgeSourcesRepo } from './sources/repo.js';
 import { syncSlackKnowledgeSources } from './sources/sync_slack.js';
-// believe: Company Brain pull source (BELIEVE-FORK.md module 2)
-import { syncCompanyBrainKnowledgeSources } from './sources/sync_company_brain.js';
 // believe: Be Chat (Mattermost) connector (BELIEVE-FORK.md module 6)
 import { syncMattermostKnowledgeSources } from './sources/sync_mattermost.js';
 import type { KnowledgeSourceConfig } from './sources/types.js';
@@ -732,15 +730,9 @@ export async function processAllSources(): Promise<void> {
         console.error('[GraphBuilder] Error syncing Slack knowledge sources:', error);
     }
 
-    // believe: pull Company Brain episodes alongside the other poll sources
-    try {
-        const brainFiles = await syncCompanyBrainKnowledgeSources();
-        if (brainFiles.length > 0) {
-            console.log(`[GraphBuilder] Company Brain sync wrote ${brainFiles.length} artifact files`);
-        }
-    } catch (error) {
-        console.error('[GraphBuilder] Error syncing Company Brain knowledge sources:', error);
-    }
+    // believe: the Company Brain pull is owned EXCLUSIVELY by BrainSyncEngine
+    // (brain/sync_engine.ts) — not hooked here, so the GraphBuilder loop and
+    // the engine never race on the same watermark/artifacts.
 
     // believe: pull Be Chat (Mattermost) posts alongside the other poll sources
     try {

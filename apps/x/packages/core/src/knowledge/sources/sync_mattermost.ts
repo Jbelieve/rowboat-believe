@@ -99,6 +99,9 @@ function isSourceDue(source: KnowledgeSourceConfig, state: MattermostSyncState):
 function safeSegment(value: string): string {
     return value
         .replace(/^https?:\/\//, '')
+        // Neutralize traversal sequences BEFORE separators so a malicious
+        // server value ("../../../etc/x") can never escape the artifact dir.
+        .replace(/\.{2,}/g, '_')
         .replace(/[\\/*?:"<>|#\s]+/g, '_')
         .replace(/_+/g, '_')
         .replace(/^_+|_+$/g, '')
@@ -170,8 +173,13 @@ class MattermostClient {
         return resolved;
     }
 
-    async listPosts(channelId: string, sinceMs?: number): Promise<MattermostPostsResponse> {
-        const query = sinceMs !== undefined && sinceMs > 0 ? `?since=${sinceMs}` : '';
+    /**
+     * One page of posts, newest-first. We paginate with page+per_page instead
+     * of ?since= because the API caps since-responses (typically 1000 posts),
+     * so a first sync or a large burst would silently lose history.
+     */
+    async listPosts(channelId: string, page: number, perPage: number): Promise<MattermostPostsResponse> {
+        const query = `?page=${page}&per_page=${perPage}`;
         const data = await this.request(`/channels/${encodeURIComponent(channelId)}/posts${query}`) as Partial<MattermostPostsResponse>;
         return { order: data.order ?? [], posts: data.posts ?? {} };
     }
@@ -326,13 +334,27 @@ async function syncSource(
         const channel = await client.resolveChannel(channelRef);
         const key = `${source.id}:${channel.id}`;
         const channelState = state.channels[key] ?? {};
-        const response = await client.listPosts(channel.id, channelState.lastPostAt);
 
-        // The API returns order newest-first; process oldest-first, only real
-        // user posts (type !== '' means system/bot event) and non-deleted.
-        const posts = response.order
-            .map(id => response.posts[id])
-            .filter((post): post is MattermostPost => Boolean(post))
+        // Page through the channel (newest-first, PER_PAGE at a time) until a
+        // short page ends the stream or the page's oldest post falls at or
+        // below the watermark — the first sync and large bursts both drain
+        // fully instead of being capped by a single ?since= response.
+        const PER_PAGE = 200;
+        const fetched: MattermostPost[] = [];
+        for (let page = 0; ; page++) {
+            const response = await client.listPosts(channel.id, page, PER_PAGE);
+            const pagePosts = response.order
+                .map(id => response.posts[id])
+                .filter((post): post is MattermostPost => Boolean(post));
+            fetched.push(...pagePosts);
+            if (response.order.length < PER_PAGE) break;
+            const oldestCreateAt = Math.min(...pagePosts.map(post => post.create_at));
+            if (channelState.lastPostAt !== undefined && oldestCreateAt <= channelState.lastPostAt) break;
+        }
+
+        // Process oldest-first, only real user posts (type !== '' means
+        // system/bot event) and non-deleted.
+        const posts = fetched
             .filter(post => (post.type ?? '') === '' && !post.delete_at)
             .sort((a, b) => a.create_at - b.create_at);
 

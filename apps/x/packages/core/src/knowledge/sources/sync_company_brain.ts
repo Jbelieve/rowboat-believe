@@ -1,12 +1,16 @@
 // believe: Company Brain pull source (module 2 of BELIEVE-FORK.md).
 // Clone of the sync_slack.ts pattern: poll mc-brain-query via BrainTransport,
 // write frontmattered artifacts under knowledge_sources/company_brain/, keep
-// a watermark (lastCreatedAt) with a 24h overlap window + id dedup because
-// created_at can arrive retroactively (omi sets the conversation date).
+// a watermark (lastCreatedAt) with a 24h overlap window + per-run id dedup
+// because created_at can arrive retroactively (omi sets the conversation
+// date). Conflict rule: the central brain ALWAYS wins — inside the overlap
+// window every episode is re-materialized through writeArtifact (idempotent:
+// unchanged content is a no-op, central edits overwrite the local artifact).
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { WorkDir } from '../../config/config.js';
-import { getCompanyBrainConfig } from '../../config/company_brain_config.js';
+import { getCompanyBrainConfig, getDeviceId } from '../../config/company_brain_config.js';
 import { HttpBrainTransport, BrainTransportError } from '../../brain/transport.js';
 import type { BrainTransport, Episode } from '../../brain/transport.js';
 import { serviceLogger } from '../../services/service_logger.js';
@@ -20,8 +24,6 @@ const MAX_SOURCE_SYNC_INTERVAL_MS = 30 * 60 * 1000;
 /** Overlap window re-queried each pull to catch retroactive created_at rows. */
 const WATERMARK_OVERLAP_MS = 24 * 60 * 60 * 1000;
 const PAGE_LIMIT = 200; // mc-brain-query hard max
-/** Cap on remembered episode ids inside the overlap window (dedup). */
-const MAX_SEEN_IDS = 5000;
 const STATE_FILE = path.join(WorkDir, 'company_brain_sync_state.json');
 const ARTIFACT_ROOT = path.join(WorkDir, 'knowledge_sources', 'company_brain');
 
@@ -32,10 +34,8 @@ export type CompanyBrainSourceSyncState = {
     lastError?: { kind: string; message: string };
     /** Rate-limit backoff: multiplies the source interval; reset on success. */
     backoffMultiplier?: number;
-    /** Watermark: max created_at seen across all pulled episodes. */
+    /** Watermark: max created_at seen across all pulled episodes (clamped to now). */
     lastCreatedAt?: string;
-    /** Episode ids already processed inside the overlap window. */
-    seenIds?: string[];
 };
 
 type CompanyBrainSyncState = {
@@ -75,6 +75,9 @@ function isSourceDue(source: KnowledgeSourceConfig, state: CompanyBrainSyncState
 function safeSegment(value: string): string {
     return value
         .replace(/^https?:\/\//, '')
+        // Neutralize traversal sequences BEFORE separators so a malicious
+        // server value ("../../../etc/x") can never escape the artifact dir.
+        .replace(/\.{2,}/g, '_')
         .replace(/[\\/*?:"<>|#\s]+/g, '_')
         .replace(/_+/g, '_')
         .replace(/^_+|_+$/g, '')
@@ -86,15 +89,22 @@ function episodeId(episode: Episode): string {
     return `${episode.source}:${episode.external_id}`;
 }
 
-function episodeCreatedAt(episode: Episode): string {
+/** Episode created_at as ISO, or null when missing/invalid — a dateless
+ * episode must not contaminate the watermark nor get a per-tick version. */
+function episodeCreatedAt(episode: Episode): string | null {
     if (episode.created_at && Number.isFinite(Date.parse(episode.created_at))) {
         return new Date(Date.parse(episode.created_at)).toISOString();
     }
-    return new Date().toISOString();
+    return null;
 }
 
 export function artifactForEpisode(source: KnowledgeSourceConfig, episode: Episode): KnowledgeArtifact {
-    const occurredAt = episodeCreatedAt(episode);
+    const createdAt = episodeCreatedAt(episode);
+    // Dateless episodes get a stable version derived from the id (never
+    // "now", which would rewrite the artifact every tick) and epoch as the
+    // placeholder occurred_at.
+    const version = createdAt ?? `no-date:${episodeId(episode)}`;
+    const occurredAt = createdAt ?? new Date(0).toISOString();
     const summary = (episode.summary ?? '').trim();
     const title = summary.split('\n')[0]?.slice(0, 200) || `Company Brain episode ${episode.external_id}`;
     const actors = episode.actors ?? [];
@@ -124,7 +134,7 @@ export function artifactForEpisode(source: KnowledgeSourceConfig, episode: Episo
         sourceId: source.id,
         provider: 'company_brain',
         externalId: `brain:${episodeId(episode)}`,
-        version: occurredAt,
+        version,
         occurredAt,
         title,
         bodyMarkdown,
@@ -146,7 +156,10 @@ function writeArtifact(source: KnowledgeSourceConfig, episode: Episode, artifact
     );
     fs.mkdirSync(dir, { recursive: true });
 
-    const filePath = path.join(dir, `${safeSegment(episode.external_id)}.md`);
+    // Short hash suffix disambiguates external_ids that collide after
+    // safeSegment's 120-char truncation.
+    const nameHash = crypto.createHash('sha256').update(episode.external_id).digest('hex').slice(0, 8);
+    const filePath = path.join(dir, `${safeSegment(episode.external_id)}-${nameHash}.md`);
     const frontmatter = [
         '---',
         `source: ${artifact.provider}`,
@@ -155,7 +168,9 @@ function writeArtifact(source: KnowledgeSourceConfig, episode: Episode, artifact
         `version: ${JSON.stringify(artifact.version)}`,
         `occurred_at: ${JSON.stringify(artifact.occurredAt)}`,
         // believe: marks the artifact as centrally-owned so the fanout
-        // producer and the authority resolver never push it back (echo guard).
+        // producer never pushes it back (echo guard). Central-wins conflict
+        // resolution lives inline in the pull: every episode inside the
+        // overlap window is re-written through the idempotent writeArtifact.
         'brain_origin: central',
         '---',
         '',
@@ -210,7 +225,13 @@ async function syncSource(
         ? new Date(watermarkMs - WATERMARK_OVERLAP_MS).toISOString()
         : undefined;
 
-    const seen = new Set(sourceState.seenIds ?? []);
+    // Dedup WITHIN this run only (repeated rows across pages). Cross-run
+    // dedup is writeArtifact's job — it is idempotent, and re-writing lets
+    // central edits inside the overlap window land locally (central wins).
+    const seen = new Set<string>();
+    // Echo filter: ONLY this device's own fanout pushes. Desktop notes from
+    // other devices are real knowledge and must materialize.
+    const ownEchoPrefix = `desktop:${getDeviceId()}:`;
     const writtenFiles: string[] = [];
     let newestCreatedAt = Number.isFinite(watermarkMs) ? watermarkMs : -Infinity;
     let offset = 0;
@@ -219,15 +240,16 @@ async function syncSource(
     while (true) {
         const rows = await transport.queryEpisodes({ since, offset, limit: PAGE_LIMIT });
         for (const episode of rows) {
-            const createdMs = Date.parse(episodeCreatedAt(episode));
-            if (Number.isFinite(createdMs) && createdMs > newestCreatedAt) {
-                newestCreatedAt = createdMs;
+            const createdIso = episodeCreatedAt(episode);
+            // Dateless episodes never move the watermark.
+            if (createdIso) {
+                const createdMs = Date.parse(createdIso);
+                if (createdMs > newestCreatedAt) newestCreatedAt = createdMs;
             }
             const id = episodeId(episode);
             if (seen.has(id)) continue;
             seen.add(id);
-            // Skip echoes of this device's own fanout pushes.
-            if (episode.external_id.startsWith('desktop:')) continue;
+            if (episode.external_id.startsWith(ownEchoPrefix)) continue;
             const artifact = artifactForEpisode(source, episode);
             const writtenFile = writeArtifact(source, episode, artifact);
             if (writtenFile) {
@@ -240,11 +262,10 @@ async function syncSource(
 
     const next: CompanyBrainSourceSyncState = { ...sourceState };
     if (Number.isFinite(newestCreatedAt) && newestCreatedAt > 0) {
-        next.lastCreatedAt = new Date(newestCreatedAt).toISOString();
+        // Clamp to now(): a rogue future created_at must never freeze the
+        // pull (since = future - 24h would skip everything real).
+        next.lastCreatedAt = new Date(Math.min(newestCreatedAt, Date.now())).toISOString();
     }
-    // Only remember ids still inside the overlap window; older rows are never
-    // re-queried, so their ids are dead weight. Cap the set defensively.
-    next.seenIds = Array.from(seen).slice(-MAX_SEEN_IDS);
     state.sources = { ...(state.sources ?? {}), [source.id]: next };
 
     return writtenFiles;
@@ -276,12 +297,25 @@ function recordSourceResult(state: CompanyBrainSyncState, sourceId: string, erro
     state.sources = { ...(state.sources ?? {}), [sourceId]: next };
 }
 
+// In-flight guard: concurrent callers (BrainSyncEngine loop + triggerSync)
+// share the running sync instead of racing on state/artifacts.
+let inFlightSync: Promise<string[]> | null = null;
+
 /**
  * Sync every enabled company_brain source. Optional transport injection for
  * tests; production builds an HttpBrainTransport from the Company Brain
  * config (and skips entirely when the config is disabled or keyless).
+ * Concurrent calls join the in-flight run (mutual exclusion).
  */
-export async function syncCompanyBrainKnowledgeSources(transportOverride?: BrainTransport): Promise<string[]> {
+export function syncCompanyBrainKnowledgeSources(transportOverride?: BrainTransport): Promise<string[]> {
+    if (inFlightSync) return inFlightSync;
+    inFlightSync = doSyncCompanyBrainKnowledgeSources(transportOverride).finally(() => {
+        inFlightSync = null;
+    });
+    return inFlightSync;
+}
+
+async function doSyncCompanyBrainKnowledgeSources(transportOverride?: BrainTransport): Promise<string[]> {
     const state = loadState();
     const sources = knowledgeSourcesRepo
         .listEnabledSources()

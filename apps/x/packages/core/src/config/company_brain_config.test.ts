@@ -61,4 +61,35 @@ describe('company_brain_config', () => {
         fs.writeFileSync(configFile, JSON.stringify({ pullIntervalMs: 'soon' }));
         expect(mod.getCompanyBrainConfig().pullIntervalMs).toBe(mod.DEFAULT_PULL_INTERVAL_MS);
     });
+
+    it('re-applies chmod 600 when reading a pre-existing config file', () => {
+        fs.mkdirSync(path.dirname(configFile), { recursive: true });
+        fs.writeFileSync(configFile, JSON.stringify({ apiKey: 'mc_deadbeef_test' }), { mode: 0o644 });
+        mod.getCompanyBrainConfig();
+        expect(fs.statSync(configFile).mode & 0o777).toBe(0o600);
+    });
+
+    it('re-applies chmod 600 when rewriting an existing config file', () => {
+        fs.mkdirSync(path.dirname(configFile), { recursive: true });
+        fs.writeFileSync(configFile, JSON.stringify({ apiKey: 'mc_deadbeef_test' }), { mode: 0o644 });
+        mod.setCompanyBrainConfig({ enabled: true });
+        expect(fs.statSync(configFile).mode & 0o777).toBe(0o600);
+    });
+});
+
+describe('getDeviceId', () => {
+    it('generates an 8-hex deviceId, persists it and returns it stably', () => {
+        const first = mod.getDeviceId();
+        expect(first).toMatch(/^[0-9a-f]{8}$/);
+        // Persisted in the config file...
+        const onDisk = JSON.parse(fs.readFileSync(configFile, 'utf-8'));
+        expect(onDisk.deviceId).toBe(first);
+        // ...and stable across calls.
+        expect(mod.getDeviceId()).toBe(first);
+    });
+
+    it('respects a deviceId already present in the config', () => {
+        mod.setCompanyBrainConfig({ deviceId: 'cafebabe' });
+        expect(mod.getDeviceId()).toBe('cafebabe');
+    });
 });
