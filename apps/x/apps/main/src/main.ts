@@ -98,8 +98,6 @@ const __dirname = dirname(__filename);
       valid = false;
     }
     if (valid) continue;
-    // believe: log temporal para confirmar en la app empaquetada qué fds venían
-    // rotos al lanzar desde Finder (causa del spawn EBADF). Quitar tras validar.
     try {
       require("node:fs").appendFileSync(
         require("node:os").homedir() + "/rowboat-fd-repair.log",
@@ -117,6 +115,40 @@ const __dirname = dirname(__filename);
       // surface its own error rather than crashing startup here.
     }
   }
+})();
+
+// believe: DIAGNÓSTICO TEMPORAL — instrumenta child_process.spawn para capturar
+// exactamente qué comando/opciones disparan el "spawn EBADF" en la app empaquetada.
+// Escribe a ~/rowboat-spawn-debug.log. Quitar tras diagnosticar.
+(function instrumentSpawn() {
+  try {
+    const cp = require("node:child_process") as typeof import("node:child_process");
+    const fs = require("node:fs") as typeof import("node:fs");
+    const os = require("node:os") as typeof import("node:os");
+    const LOG = os.homedir() + "/rowboat-spawn-debug.log";
+    const w = (m: string) => { try { fs.appendFileSync(LOG, m + "\n"); } catch { /* noop */ } };
+    w(`[${new Date().toISOString()}] instrument armed`);
+    const origSpawn = cp.spawn.bind(cp);
+    // @ts-expect-error monkeypatch
+    cp.spawn = function (cmd: string, args?: unknown, opts?: unknown) {
+      const a = Array.isArray(args) ? args : [];
+      const o = (Array.isArray(args) ? opts : args) as Record<string, unknown> | undefined;
+      const stdio = o && typeof o === "object" ? JSON.stringify((o as { stdio?: unknown }).stdio) : "?";
+      w(`[${new Date().toISOString()}] SPAWN cmd=${String(cmd)} args=${JSON.stringify(a).slice(0, 200)} stdio=${stdio}`);
+      try {
+        // @ts-expect-error passthrough
+        const child = origSpawn(cmd, args, opts);
+        child.on?.("error", (e: NodeJS.ErrnoException) => {
+          w(`[${new Date().toISOString()}] SPAWN-ERR cmd=${String(cmd)} code=${e.code} msg=${e.message}\n${e.stack}`);
+        });
+        return child;
+      } catch (e) {
+        const err = e as NodeJS.ErrnoException;
+        w(`[${new Date().toISOString()}] SPAWN-THROW cmd=${String(cmd)} code=${err.code} msg=${err.message}\n${err.stack}`);
+        throw e;
+      }
+    };
+  } catch { /* noop */ }
 })();
 
 // run this as early in the main process as possible
