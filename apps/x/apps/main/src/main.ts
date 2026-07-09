@@ -116,61 +116,6 @@ const __dirname = dirname(__filename);
     }
   }
 })();
-
-// believe: DIAGNÓSTICO TEMPORAL — instrumenta child_process.spawn para capturar
-// exactamente qué comando/opciones disparan el "spawn EBADF" en la app empaquetada.
-// Escribe a ~/rowboat-spawn-debug.log. Quitar tras diagnosticar.
-(function instrumentSpawn() {
-  try {
-    const cp = require("node:child_process") as typeof import("node:child_process");
-    const fs = require("node:fs") as typeof import("node:fs");
-    const os = require("node:os") as typeof import("node:os");
-    const LOG = os.homedir() + "/rowboat-spawn-debug.log";
-    const w = (m: string) => { try { fs.appendFileSync(LOG, m + "\n"); } catch { /* noop */ } };
-    w(`[${new Date().toISOString()}] instrument armed`);
-    /* eslint-disable @typescript-eslint/no-explicit-any */
-    const cpAny = cp as any;
-    const origSpawn = cpAny.spawn.bind(cp);
-    cpAny.spawn = function (cmd: any, args?: any, opts?: any) {
-      const a = Array.isArray(args) ? args : [];
-      const o = (Array.isArray(args) ? opts : args) || {};
-      const stdio = o && typeof o === "object" ? JSON.stringify(o.stdio) : "?";
-      w(`[${new Date().toISOString()}] SPAWN cmd=${String(cmd)} args=${JSON.stringify(a).slice(0, 200)} stdio=${stdio}`);
-      // believe: DIAGNÓSTICO — aislar qué opción del spawn de claude dispara EBADF.
-      if (String(cmd).includes("claude") && o && typeof o === "object") {
-        const optKeys = Object.keys(o);
-        w(`  OPTS keys=${JSON.stringify(optKeys)} cwd=${String(o.cwd)} hasSignal=${!!o.signal} windowsHide=${!!o.windowsHide} envCount=${o.env ? Object.keys(o.env).length : "none"}`);
-        const control = (name: string, copts: any) => {
-          try {
-            const c = origSpawn(cmd, ["--version"], copts);
-            c.on("error", (e: any) => w(`  CTRL[${name}] err ${e.code}`));
-            c.on("spawn", () => { w(`  CTRL[${name}] OK`); try { c.kill(); } catch { /*noop*/ } });
-          } catch (e: any) { w(`  CTRL[${name}] throw ${e.code}`); }
-        };
-        control("minimal", { stdio: ["pipe", "pipe", "pipe"] });
-        control("with-env", { stdio: ["pipe", "pipe", "pipe"], env: o.env });
-        control("with-cwd", { stdio: ["pipe", "pipe", "pipe"], cwd: o.cwd });
-        control("with-signal", { stdio: ["pipe", "pipe", "pipe"], signal: o.signal });
-        control("execPath-node", { stdio: ["pipe", "pipe", "pipe"], env: { ...o.env, ELECTRON_RUN_AS_NODE: "1" } });
-        control("shell-true", { stdio: ["pipe", "pipe", "pipe"], shell: true });
-      }
-      try {
-        const child = origSpawn(cmd, args, opts);
-        if (child && typeof child.on === "function") {
-          child.on("error", (e: any) => {
-            w(`[${new Date().toISOString()}] SPAWN-ERR cmd=${String(cmd)} code=${e.code} msg=${e.message}\n${e.stack}`);
-          });
-        }
-        return child;
-      } catch (e: any) {
-        w(`[${new Date().toISOString()}] SPAWN-THROW cmd=${String(cmd)} code=${e.code} msg=${e.message}\n${e.stack}`);
-        throw e;
-      }
-    };
-    /* eslint-enable @typescript-eslint/no-explicit-any */
-  } catch { /* noop */ }
-})();
-
 // run this as early in the main process as possible
 if (started) app.quit();
 

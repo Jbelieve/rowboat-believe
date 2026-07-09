@@ -129,7 +129,36 @@ async function getCategoryModel(
     if (signedIn) {
         return { model: curatedModel, provider: SIGNED_IN_DEFAULT_PROVIDER };
     }
-    return getDefaultModelAndProvider();
+    const resolved = await getDefaultModelAndProvider();
+    // believe: las categorías de ALTO VOLUMEN (grafo, tagging, live-note, permisos)
+    // NO deben correr por la suscripción (flavor claude-code): spawnean un proceso
+    // `claude` por lote/nota y eso satura descriptores de archivo (spawn EBADF),
+    // además de ser lento y quemar el rate limit del plan. Si el assistant está en
+    // suscripción pero hay una API key BYOK configurada, esas categorías caen a un
+    // modelo API barato. La suscripción se reserva para el chat/cowork interactivo.
+    if (resolved.provider === "claude-code") {
+        const fallback = await pickCheapApiModel();
+        if (fallback) return fallback;
+    }
+    return resolved;
+}
+
+// believe: primer provider BYOK con credenciales, con un modelo barato/rápido
+// para tareas de fondo. null si el usuario solo tiene la suscripción.
+async function pickCheapApiModel(): Promise<ModelSelection | null> {
+    const cfg = await readConfig();
+    const providers = cfg?.providers ?? {};
+    const prefs: Array<{ flavor: string; model: string }> = [
+        { flavor: "anthropic", model: "claude-haiku-4-5-20251001" },
+        { flavor: "openai", model: "gpt-5.4" },
+        { flavor: "google", model: "gemini-3.5-flash" },
+    ];
+    for (const p of prefs) {
+        if (providers[p.flavor]?.apiKey) {
+            return { model: p.model, provider: p.flavor };
+        }
+    }
+    return null;
 }
 
 /**
