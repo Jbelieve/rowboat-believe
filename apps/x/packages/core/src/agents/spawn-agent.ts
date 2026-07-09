@@ -8,6 +8,7 @@ import {
     isInlineAgentRequest,
     reduceTurn,
 } from "@x/shared/dist/turns.js";
+import { languageDirective } from "../config/output_language.js"; // believe:
 
 // The spawn-agent tool: runs a sub-agent as a standalone headless child turn
 // and returns its final answer. The input schema and description live here
@@ -152,8 +153,12 @@ export async function runSpawnedAgent(
                   // The task alone is usually a complete spec — models
                   // routinely omit `instructions` for ad-hoc workers, and
                   // rejecting that just costs a correction round-trip.
+                  // believe: los sub-agentes inline NO pasan por
+                  // composeSystemInstructions (ver InlineAgentResolver), así que
+                  // añadimos aquí la directiva de idioma sobre su output visible.
                   instructions:
-                      input.instructions ?? defaultWorkerInstructions(agentName),
+                      (input.instructions ?? defaultWorkerInstructions(agentName))
+                      + languageDirective("your final answer and any content you produce"),
                   ...(model ? { model } : {}),
                   ...(input.tools ? { tools: input.tools } : {}),
               },

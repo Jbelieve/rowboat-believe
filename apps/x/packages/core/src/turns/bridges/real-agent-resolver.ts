@@ -133,6 +133,7 @@ export class RealAgentResolver {
             codeCwd: composition.codeCwd ?? null,
             videoMode: composition.videoMode ?? false,
             coachMode: composition.coachMode ?? false,
+            agentName: requested.agentId, // believe: para saltar clasificadores JSON al forzar idioma
         });
 
         const tools = await this.resolveTools(agent, {

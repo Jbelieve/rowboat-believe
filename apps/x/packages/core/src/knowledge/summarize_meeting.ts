@@ -6,6 +6,7 @@ import { getMeetingNotesModel, resolveProviderConfig } from '../models/defaults.
 import { WorkDir } from '../config/config.js';
 import { captureLlmUsage } from '../analytics/usage.js';
 import { withUseCase } from '../analytics/use_case.js';
+import { languageDirective } from '../config/output_language.js'; // believe:
 
 const CALENDAR_SYNC_DIR = path.join(WorkDir, 'calendar_sync');
 
@@ -154,7 +155,8 @@ export async function summarizeMeeting(transcript: string, meetingStartTime?: st
 
     const result = await withUseCase({ useCase: 'meeting_note' }, () => generateText({
         model,
-        system: SYSTEM_PROMPT,
+        // believe: forzar el resumen de la reunión en el idioma configurado
+        system: SYSTEM_PROMPT + languageDirective('the meeting notes'),
         prompt,
     }));
 

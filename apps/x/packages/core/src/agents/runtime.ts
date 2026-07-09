@@ -2,6 +2,7 @@ import { jsonSchema, ModelMessage } from "ai";
 import fs from "fs";
 import path from "path";
 import { WorkDir } from "../config/config.js";
+import { languageDirective } from "../config/output_language.js"; // believe:
 import { Agent, ToolAttachment } from "@x/shared/dist/agent.js";
 import { AssistantContentPart, AssistantMessage, Message, MessageList, ProviderOptions, ToolCallPart, ToolMessage, UserMessageContext } from "@x/shared/dist/message.js";
 import { LanguageModel, stepCountIs, streamText, tool, Tool, ToolSet } from "ai";
@@ -342,7 +343,16 @@ export interface ComposeSystemInstructionsInput {
     // Optional so legacy callers (old streamAgent path) are unaffected.
     videoMode?: boolean;
     coachMode?: boolean;
+    // believe: nombre del agente, para saltar los clasificadores JSON al forzar idioma.
+    agentName?: string | null;
 }
+
+// believe: agentes que devuelven SOLO JSON/YAML/enums (clasificación pura). Forzar
+// idioma en su output rompería el parseo, así que NO reciben la directiva de idioma.
+const LANGUAGE_DIRECTIVE_EXCLUDED_AGENTS = new Set<string>([
+    'labeling_agent',
+    'note_tagging_agent',
+]);
 
 // System-prompt assembly, extracted verbatim from streamAgent so the new turn
 // runtime's agent resolver composes byte-identical prompts. Pure: callers
@@ -358,8 +368,16 @@ export function composeSystemInstructions({
     codeCwd,
     videoMode,
     coachMode,
+    agentName,
 }: ComposeSystemInstructionsInput): string {
     let instructionsWithDateTime = `${instructions}\n\n${USER_CONTEXT_SYSTEM_INSTRUCTIONS}`;
+        // believe: forzar que TODO el contenido generado salga en el idioma configurado
+        // (config/note_creation.json). Se aplica a chat/cowork, sub-agentes, note_creation,
+        // note_curation, inline_task_agent y background-task-agent — todos pasan por aquí.
+        // Se saltan los clasificadores JSON/YAML (ver LANGUAGE_DIRECTIVE_EXCLUDED_AGENTS).
+        if (!agentName || !LANGUAGE_DIRECTIVE_EXCLUDED_AGENTS.has(agentName)) {
+            instructionsWithDateTime += languageDirective('your generated output (replies, summaries, notes, tasks, and any user-visible text)');
+        }
         if (agentNotesContext) {
             instructionsWithDateTime += `\n\n${agentNotesContext}`;
         }
@@ -1611,6 +1629,7 @@ export async function* streamAgent({
             searchEnabled,
             codeMode,
             codeCwd,
+            agentName: state.agentName, // believe: para saltar clasificadores JSON al forzar idioma
         });
         let streamError: string | null = null;
         for await (const event of streamLlm(

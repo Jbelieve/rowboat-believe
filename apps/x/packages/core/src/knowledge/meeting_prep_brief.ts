@@ -8,6 +8,7 @@ import { captureLlmUsage } from '../analytics/usage.js';
 import { withUseCase } from '../analytics/use_case.js';
 import { parseFrontmatter } from '../application/lib/parse-frontmatter.js';
 import { resolveMeetingPrep, type MeetingPrepResult } from './meeting_prep.js';
+import { languageDirective } from '../config/output_language.js'; // believe:
 
 const MEETINGS_DIR = path.join(WorkDir, 'knowledge', 'Meetings');
 const PREP_DIR = path.join(MEETINGS_DIR, 'prep');
@@ -181,7 +182,8 @@ async function generateBrief(event: CalendarEvent, ctx: Awaited<ReturnType<typeo
 
     const result = await withUseCase({ useCase: 'meeting_prep' }, () => generateText({
         model,
-        system: BRIEF_SYSTEM,
+        // believe: forzar el brief de preparación de reunión en el idioma configurado
+        system: BRIEF_SYSTEM + languageDirective('the meeting prep brief'),
         prompt: parts.join('\n\n'),
     }));
     captureLlmUsage({ useCase: 'meeting_prep', model: modelId, provider: providerName, usage: result.usage });

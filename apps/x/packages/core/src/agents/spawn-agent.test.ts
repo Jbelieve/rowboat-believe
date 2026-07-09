@@ -9,6 +9,7 @@ import type {
     IHeadlessAgentRunner,
 } from "./headless.js";
 import { runSpawnedAgent } from "./spawn-agent.js";
+import { languageDirective } from "../config/output_language.js"; // believe:
 
 const TS = "2026-07-07T10:00:00Z";
 
@@ -102,7 +103,8 @@ describe("runSpawnedAgent", () => {
         expect(started[0].agent).toEqual({
             inline: {
                 name: "researcher",
-                instructions: "You research.",
+                // believe: se fuerza el idioma de salida en sub-agentes inline
+                instructions: "You research." + languageDirective("your final answer and any content you produce"),
                 model: { provider: "parent-p", model: "parent-m" },
             },
         });
