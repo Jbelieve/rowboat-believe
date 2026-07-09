@@ -98,6 +98,14 @@ const __dirname = dirname(__filename);
       valid = false;
     }
     if (valid) continue;
+    // believe: log temporal para confirmar en la app empaquetada qué fds venían
+    // rotos al lanzar desde Finder (causa del spawn EBADF). Quitar tras validar.
+    try {
+      require("node:fs").appendFileSync(
+        require("node:os").homedir() + "/rowboat-fd-repair.log",
+        `[${new Date().toISOString()}] fd ${fd} was INVALID at launch, repairing\n`
+      );
+    } catch { /* noop */ }
     // fd is invalid: reopen /dev/null so this descriptor number is backed by a
     // real file. We process 0→1→2 in order, so the lowest free fd openSync
     // returns is always the target `fd` (any lower one was repaired on a prior
