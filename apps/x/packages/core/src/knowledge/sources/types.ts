@@ -7,6 +7,9 @@ export const KnowledgeSourceProvider = z.enum([
     'slack',
     'github',
     'linear',
+    // believe: Company Brain + Be Chat (Mattermost) knowledge providers
+    'company_brain',
+    'mattermost',
 ]);
 export type KnowledgeSourceProvider = z.infer<typeof KnowledgeSourceProvider>;
 

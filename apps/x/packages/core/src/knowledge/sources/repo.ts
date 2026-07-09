@@ -42,6 +42,24 @@ const BUILTIN_SOURCES: KnowledgeSourceConfig[] = [
         syncMode: 'file',
         scopes: [],
     },
+    // believe: Company Brain pull source (disabled until configured)
+    {
+        id: 'company-brain',
+        provider: 'company_brain',
+        enabled: false,
+        artifactDir: path.join('knowledge_sources', 'company_brain'),
+        syncMode: 'poll',
+        scopes: [],
+    },
+    // believe: Be Chat (Mattermost) source (disabled until configured)
+    {
+        id: 'mattermost',
+        provider: 'mattermost',
+        enabled: false,
+        artifactDir: path.join('knowledge_sources', 'mattermost'),
+        syncMode: 'poll',
+        scopes: [],
+    },
 ];
 
 function ensureConfigDir(): void {
