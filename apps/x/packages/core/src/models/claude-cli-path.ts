@@ -17,6 +17,7 @@ import { existsSync, accessSync, constants, readdirSync } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { resolveClaudeExecutable } from '../code-mode/acp/claude-exec.js';
+import { loginShellPath } from '../code-mode/acp/shell-env.js';
 
 let cached: string | undefined;
 let probed = false;
@@ -84,4 +85,51 @@ export function resolveClaudeCodeExecutablePath(): string | undefined {
         console.warn('[claude-code] could not resolve claude CLI on Windows — provider will use its bundled default.');
     }
     return undefined;
+}
+
+// believe: Settings that let the Agent SDK spawn `claude` from the PACKAGED app
+// launched via Finder/Dock. Two failure modes are fixed here, mirroring what the
+// ACP code-mode engine (code-mode/acp/agents.ts) already does and which the user
+// confirmed works in the packaged app:
+//
+//  1. "spawn EBADF". The Agent SDK's spawnLocalProcess uses
+//     `stdio: ['pipe','pipe', DEBUG_CLAUDE_AGENT_SDK || options.stderr ? 'pipe' : 'ignore']`.
+//     A GUI (Finder/Dock) launch gives the Electron process no valid stdio fds, so
+//     the child's stderr `'ignore'` (which dup2's /dev/null onto a broken fd 2)
+//     throws EBADF at libuv. Forcing stderr to `'pipe'` avoids the broken fd. We
+//     flip it two ways: set DEBUG_CLAUDE_AGENT_SDK=1 in the child env AND pass an
+//     `stderr` callback — either alone makes the SDK use `'pipe'`; we do both so a
+//     regression in one path still leaves the fd valid, and the callback captures
+//     claude's stderr for diagnosis. In dev (terminal launch) fds are valid, so
+//     this is a no-op there.
+//  2. Stripped PATH. GUI launches inherit launchd's minimal PATH, so tools `claude`
+//     itself spawns (git, gh, rg, bash) fail with "command not found". Graft the
+//     login-shell PATH onto the child env, exactly as the ACP engine does.
+//
+// Note: `pathToClaudeCodeExecutable` points the SDK at the user's real `claude`
+// (a node shebang script with no extension). The SDK spawns it directly (its C6
+// extension check treats a no-extension path as a native executable), so we do NOT
+// need ELECTRON_RUN_AS_NODE here — that only matters when the interpreter is
+// process.execPath (Electron), which is the ACP engine's case, not this one.
+export function claudeCodeSpawnSettings(): { env: Record<string, string | undefined>; stderr: (data: string) => void } {
+    const env: Record<string, string | undefined> = { ...process.env };
+
+    const shellPath = loginShellPath();
+    if (shellPath && shellPath !== env.PATH) {
+        const dirs = [...shellPath.split(path.delimiter), ...(env.PATH ?? '').split(path.delimiter)];
+        env.PATH = [...new Set(dirs.filter(Boolean))].join(path.delimiter);
+    }
+
+    // Forces the SDK's child stderr from 'ignore' to 'pipe' (see failure mode 1).
+    env.DEBUG_CLAUDE_AGENT_SDK = '1';
+
+    return {
+        env,
+        stderr: (data: string) => {
+            // Surface claude's own stderr so packaged-app spawn/auth failures are
+            // diagnosable. Trim to avoid flooding logs.
+            const line = data.toString().trimEnd();
+            if (line) console.error(`[claude-code] ${line.slice(0, 2000)}`);
+        },
+    };
 }

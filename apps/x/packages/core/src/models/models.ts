@@ -8,7 +8,7 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createClaudeCode } from 'ai-sdk-provider-claude-code'; // believe:
 import { buildRowboatMcpBridge, ROWBOAT_MCP_SERVER_NAME } from './claude-code-mcp-bridge.js'; // believe:
-import { resolveClaudeCodeExecutablePath } from './claude-cli-path.js'; // believe:
+import { resolveClaudeCodeExecutablePath, claudeCodeSpawnSettings } from './claude-cli-path.js'; // believe:
 import { LlmModelConfig, LlmProvider } from "@x/shared/dist/models.js";
 import z from "zod";
 import { getGatewayProvider } from "./gateway.js";
@@ -104,22 +104,29 @@ export function createProvider(
             // which doesn't exist there. Point it at the user's real `claude`
             // binary; omit the key when unresolved so behavior is unchanged.
             const pathToClaudeCodeExecutable = resolveClaudeCodeExecutablePath();
+            // believe: env + stderr so the Agent SDK can spawn `claude` from the
+            // PACKAGED app launched via Finder/Dock (no valid stdio fds → otherwise
+            // "spawn EBADF"; stripped launchd PATH → "command not found"). Mirrors
+            // the ACP code-mode engine's spawn setup, which works in the packaged app.
+            const spawnSettings = claudeCodeSpawnSettings();
             if (claudeCodeBuiltinTools && claudeCodeBuiltinTools.length > 0) {
                 const bridge = buildRowboatMcpBridge(claudeCodeBuiltinTools);
                 return createClaudeCode({
                     defaultSettings: {
                         ...(pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable } : {}),
+                        ...spawnSettings,
                         mcpServers: { [ROWBOAT_MCP_SERVER_NAME]: bridge.server },
                         allowedTools: bridge.allowedTools,
                         permissionMode: 'bypassPermissions',
                     },
                 }) as unknown as ProviderV2;
             }
-            return createClaudeCode(
-                pathToClaudeCodeExecutable
-                    ? { defaultSettings: { pathToClaudeCodeExecutable } }
-                    : undefined,
-            ) as unknown as ProviderV2;
+            return createClaudeCode({
+                defaultSettings: {
+                    ...(pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable } : {}),
+                    ...spawnSettings,
+                },
+            }) as unknown as ProviderV2;
         }
         default:
             throw new Error(`Unsupported provider flavor: ${config.flavor}`);
