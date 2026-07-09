@@ -305,7 +305,7 @@ function AppearanceSettings() {
 
 // --- Model Settings UI ---
 
-type LlmProviderFlavor = "openai" | "anthropic" | "google" | "openrouter" | "aigateway" | "ollama" | "openai-compatible"
+type LlmProviderFlavor = "openai" | "anthropic" | "google" | "openrouter" | "aigateway" | "ollama" | "openai-compatible" | "claude-code"
 
 interface LlmModelOption {
   id: string
@@ -321,9 +321,22 @@ const primaryProviders: Array<{ id: LlmProviderFlavor; name: string; description
 ]
 
 const moreProviders: Array<{ id: LlmProviderFlavor; name: string; description: string }> = [
+  // believe: Claude via the user's Claude subscription (Agent SDK/CLI). No API
+  // key — auth lives in the local Claude CLI login. Core bridges builtin tools
+  // over MCP (claude-code-mcp-bridge.ts) when flavor === "claude-code".
+  { id: "claude-code", name: "Claude (Suscripción)", description: "Use your Claude subscription (no API key)" },
   { id: "openrouter", name: "OpenRouter", description: "Multiple models, one key" },
   { id: "aigateway", name: "AI Gateway (Vercel)", description: "Vercel's AI Gateway" },
   { id: "openai-compatible", name: "OpenAI-Compatible", description: "Custom OpenAI-compatible API" },
+]
+
+// believe: claude-code has no HTTP model-listing endpoint (see
+// listModelsForProvider in core/models/models.ts). Seed the catalog with the
+// same aliases the CLI accepts so the assistant-model dropdown works.
+const CLAUDE_CODE_MODELS: LlmModelOption[] = [
+  { id: "sonnet", name: "Sonnet" },
+  { id: "opus", name: "Opus" },
+  { id: "haiku", name: "Haiku" },
 ]
 
 const preferredDefaults: Partial<Record<LlmProviderFlavor, string>> = {
@@ -357,6 +370,8 @@ function ModelSettings({ dialogOpen, rowboatConnected = false }: { dialogOpen: b
     aigateway: { apiKey: "", baseURL: "", models: [""], knowledgeGraphModel: "", meetingNotesModel: "", liveNoteAgentModel: "", autoPermissionDecisionModel: "" },
     ollama: { apiKey: "", baseURL: "http://localhost:11434", models: [""], knowledgeGraphModel: "", meetingNotesModel: "", liveNoteAgentModel: "", autoPermissionDecisionModel: "" },
     "openai-compatible": { apiKey: "", baseURL: "http://localhost:1234/v1", models: [""], knowledgeGraphModel: "", meetingNotesModel: "", liveNoteAgentModel: "", autoPermissionDecisionModel: "" },
+    // believe: subscription Claude — no key, defaults to sonnet.
+    "claude-code": { apiKey: "", baseURL: "", models: ["sonnet"], knowledgeGraphModel: "", meetingNotesModel: "", liveNoteAgentModel: "", autoPermissionDecisionModel: "" },
   })
   const [modelsCatalog, setModelsCatalog] = useState<Record<string, LlmModelOption[]>>({})
   const [modelsLoading, setModelsLoading] = useState(false)
@@ -371,12 +386,14 @@ function ModelSettings({ dialogOpen, rowboatConnected = false }: { dialogOpen: b
   const [deferExplicit, setDeferExplicit] = useState(false)
 
   const activeConfig = providerConfigs[provider]
+  // believe: claude-code authenticates via the local Claude CLI login — no API
+  // key, no base URL. It stays out of every requires/show flag below.
   const showApiKey = provider === "openai" || provider === "anthropic" || provider === "google" || provider === "openrouter" || provider === "aigateway" || provider === "openai-compatible"
   const requiresApiKey = provider === "openai" || provider === "anthropic" || provider === "google" || provider === "openrouter" || provider === "aigateway"
   const showBaseURL = provider === "ollama" || provider === "openai-compatible" || provider === "aigateway"
   const requiresBaseURL = provider === "ollama" || provider === "openai-compatible"
   const isLocalProvider = provider === "ollama" || provider === "openai-compatible"
-  const modelsForProvider = modelsCatalog[provider] || []
+  const modelsForProvider = provider === "claude-code" ? CLAUDE_CODE_MODELS : (modelsCatalog[provider] || [])
   const showModelInput = isLocalProvider || modelsForProvider.length === 0
   const isMoreProvider = moreProviders.some(p => p.id === provider)
 
@@ -537,6 +554,12 @@ function ModelSettings({ dialogOpen, rowboatConnected = false }: { dialogOpen: b
         },
         model: allModels[0] || "",
         models: allModels,
+        // believe: make subscription Claude the explicit default so it wins in
+        // both BYOK and signed-in modes (top-level fallback is skipped when
+        // signed in — only defaultSelection is honored there).
+        ...(provider === "claude-code"
+          ? { defaultSelection: { provider: "claude-code", model: allModels[0] || "sonnet" } }
+          : {}),
         ...(rowboatConnected ? {} : {
           knowledgeGraphModel: activeConfig.knowledgeGraphModel.trim() || undefined,
           meetingNotesModel: activeConfig.meetingNotesModel.trim() || undefined,
@@ -590,6 +613,9 @@ function ModelSettings({ dialogOpen, rowboatConnected = false }: { dialogOpen: b
         },
         model: allModels[0],
         models: allModels,
+        ...(prov === "claude-code"
+          ? { defaultSelection: { provider: "claude-code", model: allModels[0] } }
+          : {}),
         ...(rowboatConnected ? {} : {
           knowledgeGraphModel: config.knowledgeGraphModel.trim() || undefined,
           meetingNotesModel: config.meetingNotesModel.trim() || undefined,
