@@ -22,6 +22,8 @@ import { init as initGmailSync } from "@x/core/dist/knowledge/sync_gmail.js";
 import { init as initCalendarSync } from "@x/core/dist/knowledge/sync_calendar.js";
 import { init as initFirefliesSync } from "@x/core/dist/knowledge/sync_fireflies.js";
 import { init as initGranolaSync } from "@x/core/dist/knowledge/granola/sync.js";
+// believe: Company Brain sync engine (pull + fanout push)
+import { init as initBrainSync } from "@x/core/dist/brain/sync_engine.js";
 import { init as initGraphBuilder } from "@x/core/dist/knowledge/build_graph.js";
 import { init as initEmailLabeling } from "@x/core/dist/knowledge/label_emails.js";
 import { init as initNoteTagging } from "@x/core/dist/knowledge/tag_notes.js";
@@ -360,7 +362,9 @@ app.whenReady().then(async () => {
   registerAppProtocol();
 
   // Initialize auto-updater (only in production)
-  if (app.isPackaged) {
+  // believe: upstream auto-update points at rowboatlabs/rowboat and would
+  // clobber the Believe fork — opt in explicitly via ROWBOAT_UPSTREAM_UPDATES=1.
+  if (app.isPackaged && process.env.ROWBOAT_UPSTREAM_UPDATES === "1") {
     updateElectronApp({
       updateSource: {
         type: UpdateSourceType.ElectronPublicUpdateService,
@@ -508,6 +512,9 @@ app.whenReady().then(async () => {
 
   // start granola sync
   initGranolaSync();
+
+  // believe: start Company Brain sync engine (pull + fanout push)
+  initBrainSync();
 
   // start knowledge graph builder
   initGraphBuilder();
