@@ -1,7 +1,10 @@
 import * as os from "os";
+import * as path from "path";
+import * as fs from "fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodeRunEvent } from "@x/shared/dist/code-mode.js";
 import container from "../../di/container.js";
+import { WorkDir } from "../../config/config.js";
 import { InMemoryAbortRegistry } from "../../runs/abort-registry.js";
 import { BuiltinTools, coalesceCodeRunEvents } from "./builtin-tools.js";
 import type { ToolContext } from "./exec-tool.js";
@@ -125,6 +128,59 @@ describe("code_agent_run", () => {
             (e) => (e as { type?: string }).type === "code-run-events-batch",
         );
         expect(batches).toHaveLength(1);
+    });
+});
+
+describe("search-brain", () => {
+    const brainConfigPath = path.join(WorkDir, "config", "company_brain.json");
+
+    afterEach(async () => {
+        vi.unstubAllGlobals();
+        await fs.rm(brainConfigPath, { force: true });
+    });
+
+    it("maps Company Brain rows to results", async () => {
+        await fs.mkdir(path.dirname(brainConfigPath), { recursive: true });
+        await fs.writeFile(
+            brainConfigPath,
+            JSON.stringify({ apiUrl: "https://omi.example.com", apiKey: "k" }),
+        );
+
+        const fetchMock = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({
+                count: 2,
+                rows: [
+                    { source: "omi", created_at: "2026-07-01", channel: null, summary: "Decidimos X", similarity: 0.91, actors: ["Jorge"] },
+                    { source: "mattermost", created_at: "2026-07-02", channel: "general", decision_summary: "Plan Y", similarity: 0.83, actors: [] },
+                ],
+            }),
+        }));
+        vi.stubGlobal("fetch", fetchMock);
+
+        const result = await BuiltinTools["search-brain"].execute({ query: "que decidimos", topK: 5, source: "omi" });
+
+        expect(result).toEqual({
+            success: true,
+            results: [
+                { source: "omi", date: "2026-07-01", channel: null, summary: "Decidimos X", similarity: 0.91, actors: ["Jorge"] },
+                { source: "mattermost", date: "2026-07-02", channel: "general", summary: "Plan Y", similarity: 0.83, actors: [] },
+            ],
+        });
+
+        const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+        expect(url).toBe("https://omi.example.com/mc-brain-search");
+        expect((init.headers as Record<string, string>)["x-api-key"]).toBe("k");
+        expect(JSON.parse(init.body as string)).toEqual({
+            query: "que decidimos",
+            limit: 5,
+            filters: { sources: ["omi"] },
+        });
+    });
+
+    it("is unavailable when no config exists", async () => {
+        await fs.rm(brainConfigPath, { force: true });
+        expect(await BuiltinTools["search-brain"].isAvailable!()).toBe(false);
     });
 });
 

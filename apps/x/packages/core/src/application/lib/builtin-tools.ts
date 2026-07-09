@@ -1519,6 +1519,87 @@ export const BuiltinTools: z.infer<typeof BuiltinToolsSchema> = {
             }
         },
     },
+    // believe: semantic search over the Believe Company Brain (voice/Gmail/Be Chat/notes).
+    'search-brain': {
+        description: 'Search the Believe Company Brain (voice captures, Gmail, Be Chat, notes) for internal context using semantic search. Returns top matches with source, date and summary.',
+        inputSchema: z.object({
+            query: z.string().describe('Natural-language query to search the Company Brain for.'),
+            topK: z.number().optional().describe('Number of results to return (default: 10, max: 50).'),
+            source: z.string().optional().describe('Restrict to one source: omi | gmail | mattermost | manual.'),
+        }),
+        isAvailable: async () => {
+            try {
+                const raw = await fs.readFile(path.join(WorkDir, 'config', 'company_brain.json'), 'utf8');
+                const config = JSON.parse(raw);
+                return !!(config.apiUrl && config.apiKey);
+            } catch {
+                return false;
+            }
+        },
+        execute: async ({ query, topK, source }: { query: string; topK?: number; source?: string }) => {
+            try {
+                const raw = await fs.readFile(path.join(WorkDir, 'config', 'company_brain.json'), 'utf8');
+                const config = JSON.parse(raw) as { apiUrl?: string; apiKey?: string };
+                if (!config.apiUrl || !config.apiKey) {
+                    return { success: false, error: 'Company Brain not configured (missing apiUrl or apiKey).' };
+                }
+
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 20000);
+                let response: Response;
+                try {
+                    response = await fetch(`${config.apiUrl}/mc-brain-search`, {
+                        method: 'POST',
+                        headers: {
+                            'x-api-key': config.apiKey,
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            query,
+                            limit: topK ?? 10,
+                            filters: source ? { sources: [source] } : {},
+                        }),
+                        signal: controller.signal,
+                    });
+                } finally {
+                    clearTimeout(timeout);
+                }
+
+                if (!response.ok) {
+                    const text = await response.text();
+                    return { success: false, error: `Company Brain search error (${response.status}): ${text}` };
+                }
+
+                const data = await response.json() as {
+                    rows?: Array<{
+                        source?: string;
+                        created_at?: string;
+                        channel?: string;
+                        summary?: string;
+                        decision_summary?: string;
+                        similarity?: number;
+                        actors?: unknown;
+                    }>;
+                };
+
+                const results = (data.rows || []).map((r) => ({
+                    source: r.source,
+                    date: r.created_at,
+                    channel: r.channel,
+                    summary: r.summary || r.decision_summary,
+                    similarity: r.similarity,
+                    actors: r.actors,
+                }));
+
+                return { success: true, results };
+            } catch (error) {
+                return {
+                    success: false,
+                    error: error instanceof Error ? error.message : 'Unknown error',
+                };
+            }
+        },
+    },
     'save-to-memory': {
         description: "Save a note about the user to the agent memory inbox. Use this when you observe something worth remembering — their preferences, communication patterns, relationship context, scheduling habits, or explicit instructions about how they want things done.",
         inputSchema: z.object({
