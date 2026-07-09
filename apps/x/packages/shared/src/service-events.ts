@@ -11,8 +11,9 @@ export const ServiceName = z.enum([
   'email_labeling',
   'note_tagging',
   'agent_notes',
-  // believe: Company Brain pull/push sync service
+  // believe: Company Brain pull/push sync service + Be Chat (Mattermost) connector
   'company_brain',
+  'mattermost',
 ]);
 
 const ServiceEventBase = z.object({

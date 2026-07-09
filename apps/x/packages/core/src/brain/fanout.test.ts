@@ -138,6 +138,10 @@ describe('emit state advancement', () => {
         await producer.emit(new FakeTransport());
 
         fs.writeFileSync(abs, '# A\n\nv2\n', 'utf-8');
+        // The mtime fast-path has ms resolution; force a distinct mtime so the
+        // rewrite is detected even when it lands in the same millisecond.
+        const bumped = new Date(Date.now() + 1000);
+        fs.utimesSync(abs, bumped, bumped);
         const transport = new FakeTransport();
         const result = await producer.emit(transport);
         expect(result.pushed).toBe(1);
