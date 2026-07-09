@@ -8,6 +8,7 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createClaudeCode } from 'ai-sdk-provider-claude-code'; // believe:
 import { buildRowboatMcpBridge, ROWBOAT_MCP_SERVER_NAME } from './claude-code-mcp-bridge.js'; // believe:
+import { resolveClaudeCodeExecutablePath } from './claude-cli-path.js'; // believe:
 import { LlmModelConfig, LlmProvider } from "@x/shared/dist/models.js";
 import z from "zod";
 import { getGatewayProvider } from "./gateway.js";
@@ -98,17 +99,27 @@ export function createProvider(
         // tool names are provided, bridge them into an in-process MCP server so the
         // subscription model can invoke Rowboat's tools (cowork agents at 100%).
         case "claude-code": {
+            // believe: In the packaged macOS app the Agent SDK defaults to a
+            // cli.js resolved relative to its bundle (…/.package/dist/cli.js),
+            // which doesn't exist there. Point it at the user's real `claude`
+            // binary; omit the key when unresolved so behavior is unchanged.
+            const pathToClaudeCodeExecutable = resolveClaudeCodeExecutablePath();
             if (claudeCodeBuiltinTools && claudeCodeBuiltinTools.length > 0) {
                 const bridge = buildRowboatMcpBridge(claudeCodeBuiltinTools);
                 return createClaudeCode({
                     defaultSettings: {
+                        ...(pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable } : {}),
                         mcpServers: { [ROWBOAT_MCP_SERVER_NAME]: bridge.server },
                         allowedTools: bridge.allowedTools,
                         permissionMode: 'bypassPermissions',
                     },
                 }) as unknown as ProviderV2;
             }
-            return createClaudeCode() as unknown as ProviderV2;
+            return createClaudeCode(
+                pathToClaudeCodeExecutable
+                    ? { defaultSettings: { pathToClaudeCodeExecutable } }
+                    : undefined,
+            ) as unknown as ProviderV2;
         }
         default:
             throw new Error(`Unsupported provider flavor: ${config.flavor}`);
