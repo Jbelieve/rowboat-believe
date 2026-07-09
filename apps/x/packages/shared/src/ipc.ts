@@ -48,7 +48,7 @@ const SlackErrorKindSchema = z.enum([
 
 const KnowledgeSourceConfigSchema = z.object({
   id: z.string(),
-  provider: z.enum(['gmail', 'meeting', 'voice_memo', 'slack', 'github', 'linear']),
+  provider: z.enum(['gmail', 'meeting', 'voice_memo', 'slack', 'github', 'linear', 'company_brain', 'mattermost']), // believe: providers del Company Brain y Be Chat
   enabled: z.boolean(),
   artifactDir: z.string(),
   syncMode: z.enum(['file', 'poll', 'event', 'manual']).default('file'),
