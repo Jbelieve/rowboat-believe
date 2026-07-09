@@ -8,6 +8,7 @@ interface NoteCreationConfig {
     strictness: NoteCreationStrictness;
     configured: boolean;
     onboardingComplete?: boolean;
+    language?: string; // believe: idioma de las notas del grafo (ej. "Spanish")
 }
 
 const CONFIG_FILE = path.join(WorkDir, 'config', 'note_creation.json');
@@ -29,6 +30,7 @@ function readConfig(): NoteCreationConfig {
                 : DEFAULT_STRICTNESS,
             configured: config.configured === true,
             onboardingComplete: config.onboardingComplete === true,
+            language: typeof config.language === 'string' ? config.language : undefined, // believe:
         };
     } catch {
         return { strictness: DEFAULT_STRICTNESS, configured: false };
@@ -137,4 +139,9 @@ export function markOnboardingComplete(): void {
 
     config.onboardingComplete = true;
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+}
+
+// believe: idioma configurado para las notas del grafo (undefined = default del modelo)
+export function getNoteLanguage(): string | undefined {
+    return readConfig().language;
 }

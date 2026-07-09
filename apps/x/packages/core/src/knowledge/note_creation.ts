@@ -1,5 +1,13 @@
 import { renderNoteTypesBlock } from './note_system.js';
 import { renderNoteEffectRules } from './tag_system.js';
+import { getNoteLanguage } from '../config/note_creation_config.js'; // believe:
+
+// believe: directiva de idioma configurable (config/note_creation.json campo "language")
+function languageRule(): string {
+  const lang = getNoteLanguage();
+  if (!lang) return '';
+  return `\n**Language rule (mandatory):** Write ALL note content (titles, headings, prose, summaries) in ${lang}. Keep wikilink targets and file names matching existing notes; technical terms and proper nouns stay in their original form.\n`;
+}
 
 export function getRaw(): string {
   return `---
@@ -1397,5 +1405,5 @@ Before completing, verify:
 - [ ] Dates are YYYY-MM-DD
 - [ ] Bidirectional links are consistent
 - [ ] New notes in correct folders
-`;
+${languageRule()}`;
 }
