@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { PrefixLogger } from "@/app/lib/utils";
 import { Composio } from "@composio/core";
-import { ZAuthConfig, ZConnectedAccount, ZCreateAuthConfigRequest, ZCreateAuthConfigResponse, ZCreateConnectedAccountRequest, ZCreateConnectedAccountResponse, ZDeleteOperationResponse, ZErrorResponse, ZGetToolkitResponse, ZListResponse, ZTool, ZToolkit, ZTriggerType } from "./types";
+import { ZAuthConfig, ZConnectedAccount, ZCreateAuthConfigRequest, ZCreateAuthConfigResponse, ZCreateConnectedAccountRequest, ZCreateConnectedAccountResponse, ZDeleteOperationResponse, ZErrorResponse, ZGetToolkitResponse, ZLinkConnectedAccountRequest, ZLinkConnectedAccountResponse, ZListResponse, ZTool, ZToolkit, ZTriggerType } from "./types";
 
 const BASE_URL = 'https://backend.composio.dev/api/v3';
 const COMPOSIO_API_KEY = process.env.COMPOSIO_API_KEY || "test";
@@ -317,6 +317,18 @@ export async function createConnectedAccount(request: z.infer<typeof ZCreateConn
 //         },
 //     });
 // }
+
+// v3 managed-OAuth connection flow. The plain POST /connected_accounts endpoint returns
+// "Creating connections on this endpoint for Composio-managed OAuth auth configs is no longer
+// supported" (400). Managed connections must be initiated via POST /connected_accounts/link,
+// which returns a redirect_url the end user opens to authorize.
+export async function linkConnectedAccount(request: z.infer<typeof ZLinkConnectedAccountRequest>): Promise<z.infer<typeof ZLinkConnectedAccountResponse>> {
+    const url = new URL(`${BASE_URL}/connected_accounts/link`);
+    return composioApiCall(ZLinkConnectedAccountResponse, url.toString(), {
+        method: 'POST',
+        body: JSON.stringify(request),
+    });
+}
 
 export async function getConnectedAccount(connectedAccountId: string): Promise<z.infer<typeof ZConnectedAccount>> {
     const url = new URL(`${BASE_URL}/connected_accounts/${connectedAccountId}`);

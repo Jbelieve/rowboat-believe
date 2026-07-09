@@ -3,7 +3,7 @@ import { IProjectsRepository } from "../../repositories/projects.repository.inte
 import { IProjectActionAuthorizationPolicy } from "../../policies/project-action-authorization.policy";
 import { IUsageQuotaPolicy } from "../../policies/usage-quota.policy.interface";
 import { ComposioConnectedAccount } from "@/src/entities/models/project";
-import { listAuthConfigs, createAuthConfig, createConnectedAccount } from "@/src/application/lib/composio/composio";
+import { listAuthConfigs, createAuthConfig, linkConnectedAccount } from "@/src/application/lib/composio/composio";
 import { ZCreateConnectedAccountResponse } from "../../lib/composio/types";
 import { ZCreateAuthConfigResponse } from "../../lib/composio/types";
 import { ZAuthScheme } from "../../lib/composio/types";
@@ -69,11 +69,25 @@ export class CreateComposioManagedConnectedAccountUseCase implements ICreateComp
             throw new Error(`No managed oauth2 auth config found for toolkit ${toolkitSlug}`);
         }
 
-        // create connected account
-        const response = await createConnectedAccount({
-            auth_config: { id: authConfigId },
-            connection: { user_id: projectId, callback_url: callbackUrl },
+        // initiate managed-OAuth connection via the /connected_accounts/link endpoint
+        // (the plain /connected_accounts endpoint no longer supports composio-managed configs)
+        const link = await linkConnectedAccount({
+            auth_config_id: authConfigId,
+            user_id: projectId,
+            callback_url: callbackUrl,
         });
+
+        // map the link response into the shape the UI expects (id + connectionData.val.redirectUrl)
+        const response: z.infer<typeof ZCreateConnectedAccountResponse> = {
+            id: link.connected_account_id,
+            connectionData: {
+                authScheme: 'OAUTH2',
+                val: {
+                    status: 'INITIATED',
+                    redirectUrl: link.redirect_url,
+                },
+            },
+        };
 
         // persist to project
         const now = new Date().toISOString();
