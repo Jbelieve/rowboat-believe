@@ -128,26 +128,28 @@ const __dirname = dirname(__filename);
     const LOG = os.homedir() + "/rowboat-spawn-debug.log";
     const w = (m: string) => { try { fs.appendFileSync(LOG, m + "\n"); } catch { /* noop */ } };
     w(`[${new Date().toISOString()}] instrument armed`);
-    const origSpawn = cp.spawn.bind(cp);
-    // @ts-expect-error monkeypatch
-    cp.spawn = function (cmd: string, args?: unknown, opts?: unknown) {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const cpAny = cp as any;
+    const origSpawn = cpAny.spawn.bind(cp);
+    cpAny.spawn = function (cmd: any, args?: any, opts?: any) {
       const a = Array.isArray(args) ? args : [];
-      const o = (Array.isArray(args) ? opts : args) as Record<string, unknown> | undefined;
-      const stdio = o && typeof o === "object" ? JSON.stringify((o as { stdio?: unknown }).stdio) : "?";
+      const o = (Array.isArray(args) ? opts : args) || {};
+      const stdio = o && typeof o === "object" ? JSON.stringify(o.stdio) : "?";
       w(`[${new Date().toISOString()}] SPAWN cmd=${String(cmd)} args=${JSON.stringify(a).slice(0, 200)} stdio=${stdio}`);
       try {
-        // @ts-expect-error passthrough
         const child = origSpawn(cmd, args, opts);
-        child.on?.("error", (e: NodeJS.ErrnoException) => {
-          w(`[${new Date().toISOString()}] SPAWN-ERR cmd=${String(cmd)} code=${e.code} msg=${e.message}\n${e.stack}`);
-        });
+        if (child && typeof child.on === "function") {
+          child.on("error", (e: any) => {
+            w(`[${new Date().toISOString()}] SPAWN-ERR cmd=${String(cmd)} code=${e.code} msg=${e.message}\n${e.stack}`);
+          });
+        }
         return child;
-      } catch (e) {
-        const err = e as NodeJS.ErrnoException;
-        w(`[${new Date().toISOString()}] SPAWN-THROW cmd=${String(cmd)} code=${err.code} msg=${err.message}\n${err.stack}`);
+      } catch (e: any) {
+        w(`[${new Date().toISOString()}] SPAWN-THROW cmd=${String(cmd)} code=${e.code} msg=${e.message}\n${e.stack}`);
         throw e;
       }
     };
+    /* eslint-enable @typescript-eslint/no-explicit-any */
   } catch { /* noop */ }
 })();
 
