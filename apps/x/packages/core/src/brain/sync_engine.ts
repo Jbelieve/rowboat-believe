@@ -74,8 +74,8 @@ export async function tick(transportOverride?: BrainTransport): Promise<void> {
             console.log(`[BrainSync] Pushed ${result.pushed} episode${result.pushed === 1 ? '' : 's'} to the Company Brain`);
         }
     } catch (error) {
-        // Fail-soft: fanout marked nothing as processed, so the same notes
-        // retry on the next due push.
+        // Fail-soft: fanout persists state per successful chunk, so only the
+        // unprocessed remainder retries on the next due push.
         const message = error instanceof Error ? error.message : String(error);
         status.lastError = { phase: 'push', message, at: new Date().toISOString() };
         console.error('[BrainSync] Push failed:', message);

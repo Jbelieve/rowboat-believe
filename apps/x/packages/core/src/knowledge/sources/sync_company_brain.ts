@@ -210,7 +210,7 @@ async function publishCompanyBrainSyncEvent(files: string[]): Promise<void> {
 
 /**
  * Pull one source's episodes into artifact files. Mutates the per-source
- * state (watermark + seenIds); throws BrainTransportError on HTTP failure
+ * state (watermark, clamped to now); throws BrainTransportError on HTTP failure
  * (status bookkeeping is the caller's job).
  */
 async function syncSource(
