@@ -75,6 +75,42 @@ const APP_LAUNCHED_AT = Date.now();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+// believe: Repair stdio file descriptors 0/1/2 before ANY child process is
+// spawned. A GUI (Finder/Dock) launch of the packaged app gives the Electron
+// main process no valid stdin/stdout/stderr fds. On Node 22+/macOS, spawning a
+// child with pipe/ignore stdio then references those broken fds during the
+// child's stdio setup and throws "spawn EBADF" at libuv — this is exactly why
+// the Claude *subscription* provider (flavor "claude-code", which runs the Agent
+// SDK's spawnLocalProcess inside main) failed while code-mode/ACP (which spawns
+// a clean child node via ELECTRON_RUN_AS_NODE) worked. Reopening /dev/null onto
+// any invalid 0/1/2 gives every downstream spawn valid descriptors to dup, which
+// is the documented remedy for the Node 22+/macOS Finder-launch EBADF class.
+// No-op in dev (terminal launch) where the fds are already valid.
+(function repairStdioFds() {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const fs = require("node:fs") as typeof import("node:fs");
+  for (const fd of [0, 1, 2] as const) {
+    let valid = false;
+    try {
+      fs.fstatSync(fd);
+      valid = true;
+    } catch {
+      valid = false;
+    }
+    if (valid) continue;
+    // fd is invalid: reopen /dev/null so this descriptor number is backed by a
+    // real file. We process 0→1→2 in order, so the lowest free fd openSync
+    // returns is always the target `fd` (any lower one was repaired on a prior
+    // iteration). Read for stdin, write for stdout/stderr.
+    try {
+      fs.openSync("/dev/null", fd === 0 ? "r" : "w");
+    } catch {
+      // If /dev/null can't be opened we can't do better; let the later spawn
+      // surface its own error rather than crashing startup here.
+    }
+  }
+})();
+
 // run this as early in the main process as possible
 if (started) app.quit();
 

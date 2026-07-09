@@ -92,16 +92,20 @@ export function resolveClaudeCodeExecutablePath(): string | undefined {
 // ACP code-mode engine (code-mode/acp/agents.ts) already does and which the user
 // confirmed works in the packaged app:
 //
-//  1. "spawn EBADF". The Agent SDK's spawnLocalProcess uses
-//     `stdio: ['pipe','pipe', DEBUG_CLAUDE_AGENT_SDK || options.stderr ? 'pipe' : 'ignore']`.
-//     A GUI (Finder/Dock) launch gives the Electron process no valid stdio fds, so
-//     the child's stderr `'ignore'` (which dup2's /dev/null onto a broken fd 2)
-//     throws EBADF at libuv. Forcing stderr to `'pipe'` avoids the broken fd. We
-//     flip it two ways: set DEBUG_CLAUDE_AGENT_SDK=1 in the child env AND pass an
-//     `stderr` callback — either alone makes the SDK use `'pipe'`; we do both so a
-//     regression in one path still leaves the fd valid, and the callback captures
-//     claude's stderr for diagnosis. In dev (terminal launch) fds are valid, so
-//     this is a no-op there.
+//  1. "spawn EBADF". NOTE: the real fix for EBADF is fd repair at process
+//     startup (see repairStdioFds() in apps/main/src/main.ts). The stderr flip
+//     below is NOT what fixes it: the Agent SDK's spawnLocalProcess uses
+//     `stdio: ['pipe','pipe', DEBUG_CLAUDE_AGENT_SDK || options.stderr ? 'pipe' : 'ignore']`,
+//     and the ai-sdk-provider-claude-code always sets `opts.stderr` (its
+//     stderrCollector), so the SDK already picks 'pipe' for stderr regardless of
+//     this env var — stderr was never the offending slot. stdin/stdout are
+//     hardcoded 'pipe', and it is those (referencing the Electron main's invalid
+//     0/1/2 during a Finder launch on Node 22+/macOS) that threw EBADF. Once
+//     main.ts backs 0/1/2 with /dev/null, every spawn — including this one — has
+//     valid descriptors. We keep DEBUG_CLAUDE_AGENT_SDK=1 + the stderr callback
+//     purely for diagnostics (the SDK logs the exact spawn command and claude's
+//     own stderr), not as the EBADF remedy. In dev (terminal launch) fds are
+//     already valid, so both the repair and this flip are no-ops.
 //  2. Stripped PATH. GUI launches inherit launchd's minimal PATH, so tools `claude`
 //     itself spawns (git, gh, rg, bash) fail with "command not found". Graft the
 //     login-shell PATH onto the child env, exactly as the ACP engine does.
