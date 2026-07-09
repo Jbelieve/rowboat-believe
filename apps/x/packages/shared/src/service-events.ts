@@ -11,6 +11,8 @@ export const ServiceName = z.enum([
   'email_labeling',
   'note_tagging',
   'agent_notes',
+  // believe: Company Brain pull/push sync service
+  'company_brain',
 ]);
 
 const ServiceEventBase = z.object({

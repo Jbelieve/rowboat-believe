@@ -19,6 +19,8 @@ import { commitAll } from './version_history.js';
 import { getTagDefinitions } from './tag_system.js';
 import { knowledgeSourcesRepo } from './sources/repo.js';
 import { syncSlackKnowledgeSources } from './sources/sync_slack.js';
+// believe: Company Brain pull source (BELIEVE-FORK.md module 2)
+import { syncCompanyBrainKnowledgeSources } from './sources/sync_company_brain.js';
 import type { KnowledgeSourceConfig } from './sources/types.js';
 import { loadUserConfig } from '../config/user_config.js';
 
@@ -726,6 +728,16 @@ export async function processAllSources(): Promise<void> {
         }
     } catch (error) {
         console.error('[GraphBuilder] Error syncing Slack knowledge sources:', error);
+    }
+
+    // believe: pull Company Brain episodes alongside the other poll sources
+    try {
+        const brainFiles = await syncCompanyBrainKnowledgeSources();
+        if (brainFiles.length > 0) {
+            console.log(`[GraphBuilder] Company Brain sync wrote ${brainFiles.length} artifact files`);
+        }
+    } catch (error) {
+        console.error('[GraphBuilder] Error syncing Company Brain knowledge sources:', error);
     }
 
     // Process voice memos first (they get moved to knowledge/)
