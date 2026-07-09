@@ -152,6 +152,7 @@ const __dirname = dirname(__filename);
         control("with-cwd", { stdio: ["pipe", "pipe", "pipe"], cwd: o.cwd });
         control("with-signal", { stdio: ["pipe", "pipe", "pipe"], signal: o.signal });
         control("execPath-node", { stdio: ["pipe", "pipe", "pipe"], env: { ...o.env, ELECTRON_RUN_AS_NODE: "1" } });
+        control("shell-true", { stdio: ["pipe", "pipe", "pipe"], shell: true });
       }
       try {
         const child = origSpawn(cmd, args, opts);
