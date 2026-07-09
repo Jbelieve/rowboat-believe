@@ -104,23 +104,18 @@ export async function initiateConnection(toolkitSlug: string): Promise<{
             authConfigId = created.auth_config.id;
         }
 
-        // Create connected account with callback URL
+        // Initiate the managed-OAuth connection via POST /connected_accounts/link.
+        // The plain POST /connected_accounts endpoint returns 400 for composio-managed
+        // OAuth auth configs ("no longer supported. Use POST /connected_accounts/link").
         const callbackUrl = REDIRECT_URI;
-        const response = await composioClient.createConnectedAccount({
-            auth_config: { id: authConfigId },
-            connection: {
-                user_id: 'rowboat-user',
-                callback_url: callbackUrl,
-            },
+        const link = await composioClient.linkConnectedAccount({
+            auth_config_id: authConfigId,
+            user_id: 'rowboat-user',
+            callback_url: callbackUrl,
         });
 
-        const connectedAccountId = response.id;
-
-        // Safely extract redirectUrl with type checking
-        const connectionVal = response.connectionData?.val;
-        const redirectUrl = typeof connectionVal === 'object' && connectionVal !== null && 'redirectUrl' in connectionVal
-            ? String((connectionVal as Record<string, unknown>).redirectUrl)
-            : undefined;
+        const connectedAccountId = link.connected_account_id;
+        const redirectUrl = link.redirect_url;
 
         if (!redirectUrl) {
             return {

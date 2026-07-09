@@ -138,6 +138,28 @@ export const ZCreateConnectedAccountResponse = z.object({
 });
 
 /**
+ * Link connected account request — v3 managed-OAuth connection flow.
+ * The plain POST /connected_accounts endpoint returns 400 for composio-managed
+ * OAuth auth configs ("no longer supported. Use POST /api/v3/connected_accounts/link").
+ * The link endpoint returns a redirect_url the end user opens to authorize.
+ */
+export const ZLinkConnectedAccountRequest = z.object({
+    auth_config_id: z.string(),
+    user_id: z.string().optional(),
+    callback_url: z.string().optional(),
+});
+
+/**
+ * Link connected account response (POST /connected_accounts/link, 201).
+ */
+export const ZLinkConnectedAccountResponse = z.object({
+    link_token: z.string().optional(),
+    redirect_url: z.string(),
+    connected_account_id: z.string(),
+    expires_at: z.string().optional(),
+}).passthrough();
+
+/**
  * Connected account schema
  */
 export const ZConnectedAccount = z.object({

@@ -13,6 +13,8 @@ import {
     ZErrorResponse,
     ZExecuteActionRequest,
     ZExecuteActionResponse,
+    ZLinkConnectedAccountRequest,
+    ZLinkConnectedAccountResponse,
     ZListResponse,
     ZSearchResultTool,
     ZToolkit,
@@ -242,6 +244,23 @@ export async function createConnectedAccount(
     request: z.infer<typeof ZCreateConnectedAccountRequest>
 ): Promise<z.infer<typeof ZCreateConnectedAccountResponse>> {
     return composioApiCall(ZCreateConnectedAccountResponse, "/connected_accounts", {}, {
+        method: 'POST',
+        body: JSON.stringify(request),
+    });
+}
+
+/**
+ * Initiate a managed-OAuth connection via POST /connected_accounts/link.
+ *
+ * The plain POST /connected_accounts endpoint (createConnectedAccount) returns 400 for
+ * Composio-managed OAuth auth configs ("Creating connections on this endpoint for
+ * Composio-managed OAuth auth configs is no longer supported"). This endpoint returns a
+ * redirect_url the end user opens to authorize, plus the connected_account_id to poll.
+ */
+export async function linkConnectedAccount(
+    request: z.infer<typeof ZLinkConnectedAccountRequest>
+): Promise<z.infer<typeof ZLinkConnectedAccountResponse>> {
+    return composioApiCall(ZLinkConnectedAccountResponse, "/connected_accounts/link", {}, {
         method: 'POST',
         body: JSON.stringify(request),
     });
