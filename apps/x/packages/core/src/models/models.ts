@@ -6,9 +6,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOllama } from "ollama-ai-provider-v2";
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { createClaudeCode } from 'ai-sdk-provider-claude-code'; // believe:
-import { buildRowboatMcpBridge, ROWBOAT_MCP_SERVER_NAME } from './claude-code-mcp-bridge.js'; // believe:
-import { resolveClaudeCodeExecutablePath, claudeCodeSpawnSettings } from './claude-cli-path.js'; // believe:
+import { ClaudeCodeSubprocessModel } from './claude-code-runner/subprocess-model.js'; // believe:
 import { LlmModelConfig, LlmProvider } from "@x/shared/dist/models.js";
 import z from "zod";
 import { getGatewayProvider } from "./gateway.js";
@@ -25,16 +23,11 @@ import {
 export const Provider = LlmProvider;
 export const ModelConfig = LlmModelConfig;
 
-// believe: When the flavor is "claude-code", the model runs on the user's
-// Claude subscription via the `claude` CLI, which ignores the AI SDK `tools`
-// option and only invokes tools exposed through its own `mcpServers`. Callers
-// that want the cowork/copilot tools available to the subscription model pass
-// the agent's builtin tool names here; we bridge them into an in-process MCP
-// server (see claude-code-mcp-bridge.ts) and allowlist them. Ignored by every
-// other flavor.
+// Create an AI SDK ProviderV2 for a config's flavor. The "claude-code" flavor is
+// NOT handled here (it runs out-of-process via ClaudeCodeSubprocessModel — see
+// createLanguageModel); it throws if reached.
 export function createProvider(
     config: z.infer<typeof Provider>,
-    claudeCodeBuiltinTools?: string[],
 ): ProviderV2 {
     const { apiKey, baseURL, headers } = config;
     switch (config.flavor) {
@@ -94,40 +87,17 @@ export function createProvider(
             }) as unknown as ProviderV2;
         case "rowboat":
             return getGatewayProvider();
-        // believe: Claude subscription via Claude Code CLI / Agent SDK. No apiKey —
-        // auth comes from the user's `claude` login on this machine. When builtin
-        // tool names are provided, bridge them into an in-process MCP server so the
-        // subscription model can invoke Rowboat's tools (cowork agents at 100%).
-        case "claude-code": {
-            // believe: In the packaged macOS app the Agent SDK defaults to a
-            // cli.js resolved relative to its bundle (…/.package/dist/cli.js),
-            // which doesn't exist there. Point it at the user's real `claude`
-            // binary; omit the key when unresolved so behavior is unchanged.
-            const pathToClaudeCodeExecutable = resolveClaudeCodeExecutablePath();
-            // believe: env + stderr so the Agent SDK can spawn `claude` from the
-            // PACKAGED app launched via Finder/Dock (no valid stdio fds → otherwise
-            // "spawn EBADF"; stripped launchd PATH → "command not found"). Mirrors
-            // the ACP code-mode engine's spawn setup, which works in the packaged app.
-            const spawnSettings = claudeCodeSpawnSettings();
-            if (claudeCodeBuiltinTools && claudeCodeBuiltinTools.length > 0) {
-                const bridge = buildRowboatMcpBridge(claudeCodeBuiltinTools);
-                return createClaudeCode({
-                    defaultSettings: {
-                        ...(pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable } : {}),
-                        ...spawnSettings,
-                        mcpServers: { [ROWBOAT_MCP_SERVER_NAME]: bridge.server },
-                        allowedTools: bridge.allowedTools,
-                        permissionMode: 'bypassPermissions',
-                    },
-                }) as unknown as ProviderV2;
-            }
-            return createClaudeCode({
-                defaultSettings: {
-                    ...(pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable } : {}),
-                    ...spawnSettings,
-                },
-            }) as unknown as ProviderV2;
-        }
+        // believe: Claude subscription (flavor "claude-code"). This flavor does NOT
+        // run in-process: the Claude Agent SDK spawns the `claude` binary, and that
+        // spawn throws "spawn EBADF" from the packaged app's MAIN process. So it is
+        // handled out-of-process in createLanguageModel via ClaudeCodeSubprocessModel
+        // (spawns a clean Electron-as-node child — the code-mode/acp recipe — where
+        // the spawn works). createProvider is never the right entry point for it.
+        case "claude-code":
+            throw new Error(
+                'claude-code flavor must be created via createLanguageModel (runs out-of-process); ' +
+                'createProvider does not support it.',
+            );
         default:
             throw new Error(`Unsupported provider flavor: ${config.flavor}`);
     }
@@ -144,7 +114,18 @@ export function createLanguageModel(
     // Ignored by all other flavors.
     claudeCodeBuiltinTools?: string[],
 ): LanguageModel {
-    const model = createProvider(providerConfig, claudeCodeBuiltinTools).languageModel(modelId);
+    // believe: The Claude subscription flavor runs OUT-OF-PROCESS. The Claude Agent
+    // SDK (under ai-sdk-provider-claude-code) spawns the `claude` binary, which
+    // throws "spawn EBADF" from the packaged app's Electron MAIN process. So we hand
+    // back a LanguageModelV2 that spawns a clean Electron-as-node subprocess (the
+    // same recipe code-mode/acp uses, where the spawn works) and relays the AI SDK's
+    // call options / stream parts across the boundary. The builtin tool names are
+    // bridged into an in-process MCP server INSIDE that subprocess (claude-code only
+    // invokes tools via its own mcpServers). streamText drives this like any model.
+    if (providerConfig.flavor === 'claude-code') {
+        return new ClaudeCodeSubprocessModel(modelId, claudeCodeBuiltinTools ?? []);
+    }
+    const model = createProvider(providerConfig).languageModel(modelId);
     return applyLocalModelSettings(model, providerConfig);
 }
 

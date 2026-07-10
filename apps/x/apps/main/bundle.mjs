@@ -119,4 +119,25 @@ await esbuild.build({
   external: ['bun:sqlite'],
 });
 
-console.log(`✅ Main process bundled to .package/dist/main.cjs (+ agent-slack ${agentSlackPkg.version} CLI)`);
+// believe: Bundle the claude-code out-of-process runner next to main.cjs. The
+// claude-code (Claude subscription) flavor runs in a CLEAN Electron-as-node child
+// (process.execPath + ELECTRON_RUN_AS_NODE=1), because the Claude Agent SDK's spawn
+// of the `claude` binary throws "spawn EBADF" from the packaged MAIN process. Like
+// agent-slack above, that child must be a real file on disk — @x/core is inlined
+// into main.cjs, so the runner's own source wouldn't otherwise exist as a spawnable
+// file. Resolved at runtime as a sibling of main.cjs (see subprocess-model.ts).
+await esbuild.build({
+  entryPoints: ['./node_modules/@x/core/dist/models/claude-code-runner/entry.js'],
+  bundle: true,
+  platform: 'node',
+  target: 'node22',
+  outfile: './.package/dist/claude-code-runner.cjs',
+  external: ['electron', 'node-pty'],
+  format: 'cjs',
+  banner: { js: cjsBanner },
+  define: {
+    'import.meta.url': '__import_meta_url',
+  },
+});
+
+console.log(`✅ Main process bundled to .package/dist/main.cjs (+ agent-slack ${agentSlackPkg.version} CLI + claude-code runner)`);
