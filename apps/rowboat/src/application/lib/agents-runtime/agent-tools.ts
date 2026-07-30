@@ -23,6 +23,7 @@ import { IDataSourcesRepository } from "@/src/application/repositories/data-sour
 import { IDataSourceDocsRepository } from "@/src/application/repositories/data-source-docs.repository.interface";
 import { container } from "@/di/container";
 import { IProjectsRepository } from "@/src/application/repositories/projects.repository.interface";
+import { logGeneration } from "@/app/lib/observability/langfuse";
 
 // Provider configuration
 const PROVIDER_API_KEY = process.env.PROVIDER_API_KEY || process.env.OPENAI_API_KEY || '';
@@ -138,6 +139,7 @@ export async function invokeMockTool(
         content: `Generate a realistic response for the tool '${toolName}' with these parameters: ${args}. The response should be concise and focused on what the tool would actually return.`
     }];
 
+    const genStartTime = new Date();
     const { text, usage } = await generateText({
         model: openai(MODEL),
         messages,
@@ -151,6 +153,19 @@ export async function invokeMockTool(
         inputTokens: usage.promptTokens,
         outputTokens: usage.completionTokens,
         context: "agents_runtime.mock_tool",
+    });
+
+    logGeneration({
+        name: "agent-tools-mock-tool",
+        model: MODEL,
+        provider: "openai",
+        input: null,
+        startTime: genStartTime,
+        usage: {
+            inputTokens: usage.promptTokens,
+            outputTokens: usage.completionTokens,
+        },
+        metadata: { toolName, context: "agents_runtime.mock_tool" },
     });
 
     return text;

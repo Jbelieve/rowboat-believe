@@ -19,6 +19,7 @@ import { IDataSourcesRepository } from '@/src/application/repositories/data-sour
 import { IDataSourceDocsRepository } from '@/src/application/repositories/data-source-docs.repository.interface';
 import { IUploadsStorageService } from '@/src/application/services/uploads-storage.service.interface';
 import { container } from '@/di/container';
+import { logGeneration } from '../lib/observability/langfuse';
 
 const FILE_PARSING_PROVIDER_API_KEY = process.env.FILE_PARSING_PROVIDER_API_KEY || process.env.OPENAI_API_KEY || '';
 const FILE_PARSING_PROVIDER_BASE_URL = process.env.FILE_PARSING_PROVIDER_BASE_URL || undefined;
@@ -85,6 +86,7 @@ async function runProcessFilePipeline(_logger: PrefixLogger, usageTracker: Usage
     if (!USE_GEMINI_FILE_PARSING) {
         // Use OpenAI to extract text content
         logger.log("Extracting content using OpenAI");
+        const parseStartTime = new Date();
         const { text, usage } = await generateText({
             model: openai(FILE_PARSING_MODEL),
             system: extractPrompt,
@@ -109,9 +111,22 @@ async function runProcessFilePipeline(_logger: PrefixLogger, usageTracker: Usage
             outputTokens: usage.completionTokens,
             context: "rag.files.llm_usage",
         });
+        logGeneration({
+            name: "rag-file-parsing",
+            model: FILE_PARSING_MODEL,
+            provider: "openai",
+            input: null,
+            startTime: parseStartTime,
+            usage: {
+                inputTokens: usage.promptTokens,
+                outputTokens: usage.completionTokens,
+            },
+            metadata: { context: "rag.files.llm_usage" },
+        });
     } else {
         // Use Gemini to extract text content
         logger.log("Extracting content using Gemini");
+        const parseStartTime = new Date();
         const model = genAI.getGenerativeModel({ model: geminiParsingModel });
 
         const result = await model.generateContent([
@@ -130,6 +145,18 @@ async function runProcessFilePipeline(_logger: PrefixLogger, usageTracker: Usage
             inputTokens: result.response.usageMetadata?.promptTokenCount || 0,
             outputTokens: result.response.usageMetadata?.candidatesTokenCount || 0,
             context: "rag.files.llm_usage",
+        });
+        logGeneration({
+            name: "rag-file-parsing",
+            model: geminiParsingModel,
+            provider: "google",
+            input: null,
+            startTime: parseStartTime,
+            usage: {
+                inputTokens: result.response.usageMetadata?.promptTokenCount || 0,
+                outputTokens: result.response.usageMetadata?.candidatesTokenCount || 0,
+            },
+            metadata: { context: "rag.files.llm_usage" },
         });
     }
 
