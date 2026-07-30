@@ -18,6 +18,7 @@ import { getProvider } from "../models/models.js";
 import { IAgentsRepo } from "./repo.js";
 import { IdGen, IMonotonicallyIncreasingIdGenerator } from "../application/lib/id-gen.js";
 import { IBus } from "../application/lib/bus.js";
+import { logGeneration } from "../observability/langfuse.js";
 import { IMessageQueue } from "../application/lib/message-queue.js";
 import { IRunsRepo } from "../runs/repo.js";
 import { IRunsLock } from "../runs/lock.js";
@@ -756,6 +757,9 @@ async function* streamLlm(
     instructions: string,
     tools: ToolSet,
 ): AsyncGenerator<z.infer<typeof LlmStepStreamEvent>, void, unknown> {
+    const startTime = new Date();
+    const modelId = typeof model === "string" ? model : model.modelId;
+    const modelProvider = typeof model === "string" ? undefined : model.provider;
     const { fullStream } = streamText({
         model,
         messages: convertFromMessages(messages),
@@ -808,6 +812,20 @@ async function* streamLlm(
                 };
                 break;
             case "finish-step":
+                logGeneration({
+                    name: "cli-agent-step",
+                    model: modelId,
+                    provider: modelProvider,
+                    input: instructions,
+                    startTime,
+                    endTime: new Date(),
+                    usage: {
+                        inputTokens: event.usage?.inputTokens,
+                        outputTokens: event.usage?.outputTokens,
+                        totalTokens: event.usage?.totalTokens,
+                    },
+                    metadata: { finishReason: event.finishReason },
+                });
                 yield {
                     type: "finish-step",
                     usage: event.usage,

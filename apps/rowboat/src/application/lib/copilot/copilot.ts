@@ -13,6 +13,7 @@ import { USE_COMPOSIO_TOOLS } from "@/app/lib/feature_flags";
 import { composio, getTool, listTriggersTypes } from "../composio/composio";
 import { UsageTracker } from "@/app/lib/billing";
 import { CopilotStreamEvent } from "@/src/entities/models/copilot";
+import { logGeneration } from "@/app/lib/observability/langfuse";
 
 const PROVIDER_API_KEY = process.env.PROVIDER_API_KEY || process.env.OPENAI_API_KEY || '';
 const PROVIDER_BASE_URL = process.env.PROVIDER_BASE_URL || undefined;
@@ -380,6 +381,7 @@ export async function getEditAgentInstructionsResponse(
         system: COPILOT_INSTRUCTIONS_EDIT_AGENT,
         messages: messages,
     }));
+    const genStartTime = new Date();
     const { object, usage } = await generateObject({
         model: openai(COPILOT_MODEL),
         messages: [
@@ -401,6 +403,19 @@ export async function getEditAgentInstructionsResponse(
         inputTokens: usage.promptTokens,
         outputTokens: usage.completionTokens,
         context: "copilot.llm_usage",
+    });
+
+    logGeneration({
+        name: "copilot-edit-agent-instructions",
+        model: COPILOT_MODEL,
+        provider: "openai",
+        input: null,
+        startTime: genStartTime,
+        usage: {
+            inputTokens: usage.promptTokens,
+            outputTokens: usage.completionTokens,
+        },
+        metadata: { projectId, context: "copilot.llm_usage" },
     });
 
     return object.agent_instructions;
@@ -498,6 +513,7 @@ export async function* streamMultiAgentResponse(
     });
 
     // emit response chunks
+    const streamStartTime = new Date();
     let chunkCount = 0;
     for await (const event of fullStream) {
         chunkCount++;
@@ -531,6 +547,18 @@ export async function* streamMultiAgentResponse(
                 inputTokens: event.usage.promptTokens,
                 outputTokens: event.usage.completionTokens,
                 context: "copilot.llm_usage",
+            });
+            logGeneration({
+                name: "copilot-multi-agent-stream",
+                model: COPILOT_MODEL,
+                provider: "openai",
+                input: null,
+                startTime: streamStartTime,
+                usage: {
+                    inputTokens: event.usage.promptTokens,
+                    outputTokens: event.usage.completionTokens,
+                },
+                metadata: { projectId, context: "copilot.llm_usage" },
             });
         }
     }
