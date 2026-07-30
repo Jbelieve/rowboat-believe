@@ -1,0 +1,38 @@
+apps/cli/src/observability/langfuse.ts
+  s_bf684972b66408::t_59bf67850d4f2e 1-125
+apps/rowboat/src/application/lib/copilot/copilot.ts
+  s_bf684972b66408::t_05c4ed60a1f33c 516
+  s_bf684972b66408::t_259059562f9d63 16
+  s_bf684972b66408::t_3caaf79ae5f29d 384,408-418
+  s_bf684972b66408::t_b144addde986f6 551-562
+  s_bf684972b66408::t_1a93e1e633d7b9 419-420
+apps/cli/src/agents/runtime.ts
+  s_bf684972b66408::t_446c2e91c02d84 21
+  s_bf684972b66408::t_bf070686125168 760-762
+  s_bf684972b66408::t_300eb37cd30ce1 815-828
+apps/rowboat/app/lib/observability/langfuse.ts
+  s_bf684972b66408::t_d7b7165805c54a 1-127
+apps/rowboat/src/application/lib/agents-runtime/agent-tools.ts
+  s_bf684972b66408::t_8a0ee3bba6db0d 26
+  s_bf684972b66408::t_847b0120742d30 142,158-168
+  s_bf684972b66408::t_05a59372f3113a 169-170
+apps/rowboat/app/scripts/rag-worker.ts
+  s_bf684972b66408::t_5bf0261fadcbd2 89,114-125,129,149-160
+  s_bf684972b66408::t_2034d214f88d18 22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "49f300b120076c0318587a69d74d012cb0c49135",
+  "prompts": {},
+  "sessions": {
+    "s_bf684972b66408": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "53400d99-4f5c-4ba0-9bb7-68e732941cc6",
+        "model": "unknown"
+      },
+      "human_author": "Jbelieve <jorge@believe-global.com>"
+    }
+  }
+}
